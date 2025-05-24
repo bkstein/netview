@@ -1,0 +1,17 @@
+[package]
+name = "netview"
+version = "0.1.0"
+description = "Live view of network connections in a terminal, inspired by Mark Russinovich's tcpview."
+authors = ["Bernd Krietenstein <bernd.krietenstein@gmx.de>"]
+license = "MIT"
+edition = "2024"
+
+[dependencies]
+color-eyre = "0.6.3"
+crossterm = { version = "0.28.1", features = ["event-stream"] }
+futures = "0.3.31"
+netstat2 = "0.9"
+num_enum = "0.7"
+ratatui = "0.29.0"
+sysinfo = "0.30"
+tokio = { version = "1.40.0", features = ["full"] }
