@@ -2,7 +2,7 @@ use netstat2::{
     AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, SocketInfo, get_sockets_info,
 };
 use num_enum::TryFromPrimitive;
-use std::{collections::HashMap, net::{IpAddr, ToSocketAddrs}, time::Instant};
+use std::{cmp::Ordering, collections::HashMap, net::IpAddr, time::Instant};
 use sysinfo::System;
 
 use crate::event::{AppEvent, Event, EventHandler};
@@ -121,8 +121,7 @@ impl App {
                 // At this point, a more complex ui could be rendered, e.g. by
                 // calling a function, that uses a layout. The current example
                 // directly renders a widget without any specified layout.
-                frame.render_widget(&self, frame.area())
-            )?;
+                frame.render_widget(&self, frame.area()))?;
             match self.events.next().await? {
                 Event::Tick => self.tick(),
                 Event::Crossterm(event) => match event {
@@ -177,17 +176,14 @@ impl App {
                 .send(AppEvent::Sort(SortColumn::try_from_primitive(4)?)),
             KeyCode::Char('5') => self
                 .events
-                .send(AppEvent::Sort(SortColumn::try_from_primitive(4)?)),
+                .send(AppEvent::Sort(SortColumn::try_from_primitive(5)?)),
             KeyCode::Char('6') => self
                 .events
-                .send(AppEvent::Sort(SortColumn::try_from_primitive(5)?)),
+                .send(AppEvent::Sort(SortColumn::try_from_primitive(6)?)),
             KeyCode::Char('7') => self
                 .events
-                .send(AppEvent::Sort(SortColumn::try_from_primitive(6)?)),
-            KeyCode::Char('8') => self
-                .events
                 .send(AppEvent::Sort(SortColumn::try_from_primitive(7)?)),
-            KeyCode::Char('9') => self
+            KeyCode::Char('8') => self
                 .events
                 .send(AppEvent::Sort(SortColumn::try_from_primitive(8)?)),
             // Other handlers you could add here.
@@ -277,11 +273,13 @@ impl App {
                 match conn.protocol_socket_info {
                     ProtocolSocketInfo::Tcp(ref tcp) => {
                         if self.show_connection(&conn) {
+                            let local_ip = self.ip_to_string(&tcp.local_addr);
+                            let remote_ip = self.ip_to_string(&tcp.remote_addr);
                             self.entries.push(ConnectionEntry {
                                 proto: "TCP".into(),
-                                local_ip: tcp.local_addr.to_string(),
+                                local_ip,
                                 local_port: tcp.local_port,
-                                remote_ip: tcp.remote_addr.to_string(),
+                                remote_ip,
                                 remote_port: tcp.remote_port,
                                 state: format!("{:?}", tcp.state),
                                 pid,
@@ -292,9 +290,10 @@ impl App {
                     }
                     ProtocolSocketInfo::Udp(ref udp) => {
                         if self.show_connection(&conn) {
+                            let local_ip = self.ip_to_string(&udp.local_addr);
                             self.entries.push(ConnectionEntry {
                                 proto: "UDP".into(),
-                                local_ip: udp.local_addr.to_string(),
+                                local_ip,
                                 local_port: udp.local_port,
                                 remote_ip: "".into(),
                                 remote_port: 0,
@@ -321,21 +320,15 @@ impl App {
         }
     }
 
-    fn resolve_dns(&mut self, addr: IpAddr, ) -> String {
-        if let Some(name) = self.dns_cache.get(&addr) {
+    fn resolve_dns(&mut self, ip: IpAddr) -> String {
+        if let Some(name) = self.dns_cache.get(&ip) {
             return name.clone();
         }
 
-        let socket = (addr, 0);
-        let name = match socket.to_socket_addrs() {
-            Ok(mut iter) => iter.next().map(|sa| sa.to_string()).unwrap_or(addr.to_string()),
-            Err(_) => addr.to_string(),
-        };
+        let hostname = dns_lookup::lookup_addr(&ip).unwrap_or_else(|_| ip.to_string());
+        self.dns_cache.insert(ip, hostname.clone());
 
-        // Strip port (if any)
-        let hostname = name.split(':').next().unwrap_or(&name).to_string();
-
-        self.dns_cache.insert(addr, hostname.clone());
+        self.dns_cache.insert(ip, hostname.clone());
         hostname
     }
 
@@ -375,19 +368,35 @@ impl App {
                 Proto => a.proto.cmp(&b.proto),
                 LocalIP => a.local_ip.cmp(&b.local_ip),
                 LocalPort => a.local_port.cmp(&b.local_port),
-                RemoteIP => a.remote_ip.cmp(&b.remote_ip),
+                RemoteIP => string_compare_with_empty(&a.remote_ip, &b.remote_ip, self.sort_order),
                 RemotePort => a.remote_port.cmp(&b.remote_port),
-                State => a.state.cmp(&b.state),
+                State => string_compare_with_empty(&a.state, &b.state, self.sort_order),
                 PID => a.pid.cmp(&b.pid),
-                Process => a.process.cmp(&b.process),
+                Process => string_compare_with_empty(&a.process, &b.process, self.sort_order),
             };
             if self.sort_order == SortOrder::Asc {
                 ord
             } else {
                 ord.reverse()
             }
-        });        
+        });
     }
-
 }
 
+/// Compare strings, but always push empty strings to the end
+fn string_compare_with_empty(a: &str, b: &str, sort_order: SortOrder) -> Ordering {
+    match sort_order {
+        SortOrder::Asc => match (a.is_empty(), b.is_empty()) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => a.cmp(b),
+        },
+        SortOrder::Desc => match (a.is_empty(), b.is_empty()) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (false, false) => a.cmp(b),
+        },
+    }
+}

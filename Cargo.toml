@@ -9,6 +9,7 @@ edition = "2024"
 [dependencies]
 color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = ["event-stream"] }
+dns-lookup = "2"
 futures = "0.3.31"
 netstat2 = "0.9"
 num_enum = "0.7"
