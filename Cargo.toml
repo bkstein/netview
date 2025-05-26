@@ -11,8 +11,10 @@ color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = ["event-stream"] }
 dns-lookup = "2"
 futures = "0.3.31"
+fxhash = "0.2"
 netstat2 = "0.9"
 num_enum = "0.7"
+pprof = { version = "0.11", features = ["flamegraph", "protobuf"] }
 ratatui = "0.29.0"
 sysinfo = "0.30"
 tokio = { version = "1.40.0", features = ["full"] }

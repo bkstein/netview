@@ -2,7 +2,13 @@ use netstat2::{
     AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, SocketInfo, get_sockets_info,
 };
 use num_enum::TryFromPrimitive;
-use std::{cmp::Ordering, collections::HashMap, net::IpAddr, time::Instant};
+use std::{
+    cmp::Ordering,
+    collections::HashMap,
+    hash::{DefaultHasher, Hash, Hasher},
+    net::IpAddr,
+    time::Instant,
+};
 use sysinfo::System;
 
 use crate::event::{AppEvent, Event, EventHandler};
@@ -44,7 +50,7 @@ pub enum ProtocolFilter {
     TcpAndUdp,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub struct ConnectionEntry {
     pub proto: String,
     pub local_ip: String,
@@ -55,6 +61,14 @@ pub struct ConnectionEntry {
     pub pid: u32,
     pub process: String,
     pub creation_time: Instant,
+}
+
+impl ConnectionEntry {
+    pub fn get_id(&self) -> u64 {
+        let mut hasher = fxhash::FxHasher::default();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 /// Application.
@@ -86,6 +100,8 @@ pub struct App {
     pub show_process_info: bool,
     /// Cache for DNS name resolutions
     dns_cache: HashMap<IpAddr, String>,
+    /// Selected network connection
+    pub selected: Option<u64>,
 }
 
 impl Default for App {
@@ -104,6 +120,7 @@ impl Default for App {
             resolve_address_names: false,
             show_process_info: false,
             dns_cache: HashMap::new(),
+            selected: None,
         }
     }
 }
@@ -130,6 +147,7 @@ impl App {
                 },
                 Event::App(app_event) => match app_event {
                     AppEvent::Quit => self.quit(),
+                    AppEvent::Pause => self.pause(),
                     AppEvent::ScrollUpSelection => self.scroll_up_selection(),
                     AppEvent::ScrollDownSelection => self.scroll_down_selection(),
                     AppEvent::ScrollUpPage => self.scroll_up_page(),
@@ -150,6 +168,7 @@ impl App {
     pub fn handle_key_events(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
+            KeyCode::Pause | KeyCode::Char(' ') => self.events.send(AppEvent::Pause),
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
             }
@@ -196,26 +215,55 @@ impl App {
     ///
     /// The tick event is where you can update the state of your application with any logic that
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
-    pub fn tick(&mut self) {
+    fn tick(&mut self) {
         if !self.paused {
             self.update_connection_entries();
         }
     }
 
     /// Set running to false to quit the application.
-    pub fn quit(&mut self) {
+    fn quit(&mut self) {
         self.running = false;
     }
 
-    pub fn scroll_up_selection(&mut self) {}
+    /// Suspend table updates
+    fn pause(&mut self) {
+        self.paused = !self.paused;
+    }
 
-    pub fn scroll_down_selection(&mut self) {}
+    fn scroll_up_selection(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
 
-    pub fn scroll_up_page(&mut self) {}
+        if let Some(selected) = self.selected {
+            if let Some(previous) = find_previous(&self.entries, |e| e.get_id() == selected) {
+                self.selected = Some(previous.get_id());
+            }
+        } else {
+            self.selected = self.entries.first().map(|entry| entry.get_id());
+        }
+    }
 
-    pub fn scroll_down_page(&mut self) {}
+    fn scroll_down_selection(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
 
-    pub fn toggle_ip_version(&mut self) {
+        if let Some(selected) = self.selected {
+            if let Some(next) = find_next(&self.entries, |e| e.get_id() == selected) {
+                self.selected = Some(next.get_id());
+            }
+        } else {
+            self.selected = self.entries.first().map(|entry| entry.get_id());
+        }
+    }
+
+    fn scroll_up_page(&mut self) {}
+
+    fn scroll_down_page(&mut self) {}
+
+    fn toggle_ip_version(&mut self) {
         self.ip_version_filter = match self.ip_version_filter {
             IpVersionFilter::Ipv4Only => IpVersionFilter::Ipv6Only,
             IpVersionFilter::Ipv6Only => IpVersionFilter::Ipv4AndIpv6,
@@ -223,7 +271,7 @@ impl App {
         };
     }
 
-    pub fn toggle_proto_version(&mut self) {
+    fn toggle_proto_version(&mut self) {
         self.protocol_filter = match self.protocol_filter {
             ProtocolFilter::TcpOnly => ProtocolFilter::UdpOnly,
             ProtocolFilter::UdpOnly => ProtocolFilter::TcpAndUdp,
@@ -231,11 +279,11 @@ impl App {
         };
     }
 
-    pub fn toggle_dns_resolution(&mut self) {
+    fn toggle_dns_resolution(&mut self) {
         self.resolve_address_names = !self.resolve_address_names;
     }
 
-    pub fn sort_by_column(&mut self, sort_column: SortColumn) {
+    fn sort_by_column(&mut self, sort_column: SortColumn) {
         if self.sort_column == sort_column {
             self.sort_order = match self.sort_order {
                 SortOrder::Asc => SortOrder::Desc,
@@ -247,7 +295,7 @@ impl App {
         self.sort_entries();
     }
 
-    pub fn show_help(&mut self) {}
+    fn show_help(&mut self) {}
 
     fn toggle_process_info(&mut self) {
         self.show_process_info = !self.show_process_info;
@@ -369,7 +417,7 @@ impl App {
                 LocalIP => a.local_ip.cmp(&b.local_ip),
                 LocalPort => a.local_port.cmp(&b.local_port),
                 RemoteIP => string_compare_with_empty(&a.remote_ip, &b.remote_ip, self.sort_order),
-                RemotePort => a.remote_port.cmp(&b.remote_port),
+                RemotePort => remote_port_compare(a.remote_port, b.remote_port, self.sort_order),
                 State => string_compare_with_empty(&a.state, &b.state, self.sort_order),
                 PID => a.pid.cmp(&b.pid),
                 Process => string_compare_with_empty(&a.process, &b.process, self.sort_order),
@@ -399,4 +447,47 @@ fn string_compare_with_empty(a: &str, b: &str, sort_order: SortOrder) -> Orderin
             (false, false) => a.cmp(b),
         },
     }
+}
+
+fn remote_port_compare(a: u16, b: u16, sort_order: SortOrder) -> Ordering {
+match sort_order {
+    SortOrder::Asc => match (a == 0, b == 0)  {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => a.cmp(&b),
+    },
+    SortOrder::Desc => match (a == 0, b == 0) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (false, false) => a.cmp(&b),
+        },
+}
+}
+
+fn find_previous<T, F>(vec: &[T], predicate: F) -> Option<&T>
+where
+    F: Fn(&T) -> bool,
+{
+    for window in vec.windows(2) {
+        let (prev, curr) = (&window[0], &window[1]);
+        if predicate(curr) {
+            return Some(prev);
+        }
+    }
+    None
+}
+
+fn find_next<T, F>(vec: &[T], predicate: F) -> Option<&T>
+where
+    F: Fn(&T) -> bool,
+{
+    for window in vec.windows(2) {
+        let (curr, next) = (&window[0], &window[1]);
+        if predicate(curr) {
+            return Some(next);
+        }
+    }
+    None
 }

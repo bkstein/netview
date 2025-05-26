@@ -55,6 +55,8 @@ pub enum AppEvent {
     ToggleDnsResolution,
     /// Quit the application.
     Quit,
+    /// Pause table updates
+    Pause,
 }
 
 /// Terminal event handler.

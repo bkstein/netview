@@ -1,11 +1,12 @@
 use ratatui::{
+    Frame,
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Cell, Row, Table, Widget}, Frame,
+    widgets::{Block, Borders, Cell, Row, Table, Widget},
 };
 
-use crate::app::{App, SortColumn, SortOrder, ConnectionEntry};
+use crate::app::{App, ConnectionEntry, SortColumn, SortOrder};
 
 impl Widget for &App {
     /// Renders the user interface widgets.
@@ -39,9 +40,9 @@ impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let table_height = area.height as usize;
 
-       let  visible_height = table_height.saturating_sub(2);
+        let visible_height = table_height.saturating_sub(2);
 
-        let rows = entries_to_rows(&self.entries, self.sort_column);
+        let rows = self.entries_to_rows();
         let header = render_header(self.sort_column, self.sort_order);
 
         let connections_title = if self.paused {
@@ -79,6 +80,87 @@ impl Widget for &App {
     }
 }
 
+impl App {
+    fn entries_to_rows(&self) -> Vec<Row<'_>> {
+    self.entries
+        .iter()
+        .map(|e| {
+            let sorted_column_style = Style::default().fg(Color::Green);
+            let selected_row_style = Style::default().add_modifier(Modifier::REVERSED);
+
+            let normal = Style::default();
+            let entry_id = e.get_id();
+
+            let cells = vec![
+                Cell::from(e.proto.clone()).style(if Some(entry_id) ==  self.selected {
+                    selected_row_style
+                } else if self.sort_column == SortColumn::Proto {
+                    sorted_column_style
+                } else {
+                    normal
+                }),
+                Cell::from(e.local_ip.clone()).style(if Some(entry_id) == self.selected {
+                    selected_row_style
+                } else if self.sort_column == SortColumn::LocalIP {
+                    sorted_column_style
+                } else {
+                    normal
+                }),
+                Cell::from(e.local_port.to_string()).style(if Some(entry_id) == self.selected {
+                    selected_row_style
+                } else if self.sort_column == SortColumn::LocalPort {
+                    sorted_column_style
+                } else {
+                    normal
+                }),
+                Cell::from(e.remote_ip.clone()).style(if Some(entry_id) == self.selected {
+                    selected_row_style
+                } else if self.sort_column == SortColumn::RemoteIP {
+                    sorted_column_style
+                } else {
+                    normal
+                }),
+                Cell::from(if e.remote_port != 0 {
+                    e.remote_port.to_string()
+                } else {
+                    "".to_string()
+                })
+                .style(if Some(entry_id) == self.selected {
+                    selected_row_style
+                } else if self.sort_column == SortColumn::RemotePort {
+                    sorted_column_style
+                } else {
+                    normal
+                }),
+                Cell::from(e.state.clone()).style(if Some(entry_id) == self.selected {
+                    selected_row_style
+                } else if self.sort_column == SortColumn::State {
+                    sorted_column_style
+                } else {
+                    normal
+                }),
+                Cell::from(e.pid.to_string()).style(if Some(entry_id) == self.selected {
+                    selected_row_style
+                } else if self.sort_column == SortColumn::PID {
+                    sorted_column_style
+                } else {
+                    normal
+                }),
+                Cell::from(e.process.clone()).style(if Some(entry_id) == self.selected {
+                    selected_row_style
+                } else if self.sort_column == SortColumn::Process {
+                    sorted_column_style
+                } else {
+                    normal
+                }),
+            ];
+
+            Row::new(cells)
+        })
+        .collect()
+}
+
+}
 fn render_header(sort_col: SortColumn, sort_order: SortOrder) -> Row<'static> {
     use SortColumn::*;
 
@@ -109,67 +191,5 @@ fn render_header(sort_col: SortColumn, sort_order: SortOrder) -> Row<'static> {
     .collect::<Vec<_>>();
 
     Row::new(header_cells)
-}
-
-fn entries_to_rows(entries: &[ConnectionEntry], sort_column: SortColumn) -> Vec<Row<'_>> {
-    entries
-        .iter()
-        .map(|e| {
-            let highlight_style = Style::default().fg(Color::Green);
-            let normal = Style::default();
-
-            let cells = vec![
-                Cell::from(e.proto.clone()).style(if sort_column == SortColumn::Proto {
-                    highlight_style
-                } else {
-                    normal
-                }),
-                Cell::from(e.local_ip.clone()).style(if sort_column == SortColumn::LocalIP {
-                    highlight_style
-                } else {
-                    normal
-                }),
-                Cell::from(e.local_port.to_string()).style(
-                    if sort_column == SortColumn::LocalPort {
-                        highlight_style
-                    } else {
-                        normal
-                    },
-                ),
-                Cell::from(e.remote_ip.clone()).style(if sort_column == SortColumn::RemoteIP {
-                    highlight_style
-                } else {
-                    normal
-                }),
-                Cell::from(if e.remote_port != 0 {
-                    e.remote_port.to_string()
-                } else {
-                    "".to_string()
-                })
-                .style(if sort_column == SortColumn::RemotePort {
-                    highlight_style
-                } else {
-                    normal
-                }),
-                Cell::from(e.state.clone()).style(if sort_column == SortColumn::State {
-                    highlight_style
-                } else {
-                    normal
-                }),
-                Cell::from(e.pid.to_string()).style(if sort_column == SortColumn::PID {
-                    highlight_style
-                } else {
-                    normal
-                }),
-                Cell::from(e.process.clone()).style(if sort_column == SortColumn::Process {
-                    highlight_style
-                } else {
-                    normal
-                }),
-            ];
-
-            Row::new(cells)
-        })
-        .collect()
 }
 
