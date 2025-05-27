@@ -92,28 +92,28 @@ impl App {
             let entry_id = e.get_id();
 
             let cells = vec![
-                Cell::from(e.proto.clone()).style(if Some(entry_id) ==  self.selected {
+                Cell::from(e.proto.clone()).style(if Some(e) ==  self.selected.as_ref() {
                     selected_row_style
                 } else if self.sort_column == SortColumn::Proto {
                     sorted_column_style
                 } else {
                     normal
                 }),
-                Cell::from(e.local_ip.clone()).style(if Some(entry_id) == self.selected {
+                Cell::from(e.local_ip.clone()).style(if Some(e) ==  self.selected.as_ref() {
                     selected_row_style
                 } else if self.sort_column == SortColumn::LocalIP {
                     sorted_column_style
                 } else {
                     normal
                 }),
-                Cell::from(e.local_port.to_string()).style(if Some(entry_id) == self.selected {
+                Cell::from(e.local_port.to_string()).style(if Some(e) ==  self.selected.as_ref() {
                     selected_row_style
                 } else if self.sort_column == SortColumn::LocalPort {
                     sorted_column_style
                 } else {
                     normal
                 }),
-                Cell::from(e.remote_ip.clone()).style(if Some(entry_id) == self.selected {
+                Cell::from(e.remote_ip.clone()).style(if Some(e) ==  self.selected.as_ref() {
                     selected_row_style
                 } else if self.sort_column == SortColumn::RemoteIP {
                     sorted_column_style
@@ -125,28 +125,28 @@ impl App {
                 } else {
                     "".to_string()
                 })
-                .style(if Some(entry_id) == self.selected {
+                .style(if Some(e) ==  self.selected.as_ref() {
                     selected_row_style
                 } else if self.sort_column == SortColumn::RemotePort {
                     sorted_column_style
                 } else {
                     normal
                 }),
-                Cell::from(e.state.clone()).style(if Some(entry_id) == self.selected {
+                Cell::from(e.state.clone()).style(if Some(e) ==  self.selected.as_ref() {
                     selected_row_style
                 } else if self.sort_column == SortColumn::State {
                     sorted_column_style
                 } else {
                     normal
                 }),
-                Cell::from(e.pid.to_string()).style(if Some(entry_id) == self.selected {
+                Cell::from(e.pid.to_string()).style(if Some(e) ==  self.selected.as_ref() {
                     selected_row_style
                 } else if self.sort_column == SortColumn::PID {
                     sorted_column_style
                 } else {
                     normal
                 }),
-                Cell::from(e.process.clone()).style(if Some(entry_id) == self.selected {
+                Cell::from(e.process.clone()).style(if Some(e) ==  self.selected.as_ref() {
                     selected_row_style
                 } else if self.sort_column == SortColumn::Process {
                     sorted_column_style

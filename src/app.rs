@@ -7,6 +7,7 @@ use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
     net::IpAddr,
+    ops::Deref,
     time::Instant,
 };
 use sysinfo::System;
@@ -50,7 +51,7 @@ pub enum ProtocolFilter {
     TcpAndUdp,
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Ord, PartialOrd, Hash)]
 pub struct ConnectionEntry {
     pub proto: String,
     pub local_ip: String,
@@ -63,11 +64,29 @@ pub struct ConnectionEntry {
     pub creation_time: Instant,
 }
 
+impl PartialEq for ConnectionEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.proto == other.proto
+            && self.local_ip == other.local_ip
+            && self.local_port == other.local_port
+            && self.remote_ip == other.remote_ip
+            && self.remote_port == other.remote_port
+            && self.state == other.state
+            && self.pid == other.pid
+    }
+}
+
+impl Eq for ConnectionEntry {}
+
 impl ConnectionEntry {
-    pub fn get_id(&self) -> u64 {
-        let mut hasher = fxhash::FxHasher::default();
-        self.hash(&mut hasher);
-        hasher.finish()
+    pub fn get_id(&self) -> String {
+        // let mut hasher = fxhash::FxHasher::default();
+        // self.hash(&mut hasher);
+        // hasher.finish()
+        format!(
+            "{}:{}:{}:{}",
+            self.local_port, self.remote_port, self.pid, self.proto
+        )
     }
 }
 
@@ -101,7 +120,7 @@ pub struct App {
     /// Cache for DNS name resolutions
     dns_cache: HashMap<IpAddr, String>,
     /// Selected network connection
-    pub selected: Option<u64>,
+    pub selected: Option<ConnectionEntry>,
 }
 
 impl Default for App {
@@ -236,12 +255,12 @@ impl App {
             return;
         }
 
-        if let Some(selected) = self.selected {
-            if let Some(previous) = find_previous(&self.entries, |e| e.get_id() == selected) {
-                self.selected = Some(previous.get_id());
+        if let Some(selected) = self.selected.clone() {
+            if let Some(previous) = self.find_previous_entry(&selected) {
+                self.selected = Some(previous.clone());
             }
         } else {
-            self.selected = self.entries.first().map(|entry| entry.get_id());
+            self.selected = self.entries.first().cloned();
         }
     }
 
@@ -250,12 +269,12 @@ impl App {
             return;
         }
 
-        if let Some(selected) = self.selected {
-            if let Some(next) = find_next(&self.entries, |e| e.get_id() == selected) {
-                self.selected = Some(next.get_id());
+        if let Some(selected) = self.selected.clone() {
+            if let Some(next) = self.find_next_entry(&selected) {
+                self.selected = Some(next.clone());
             }
         } else {
-            self.selected = self.entries.first().map(|entry| entry.get_id());
+            self.selected = self.entries.first().cloned();
         }
     }
 
@@ -357,6 +376,7 @@ impl App {
         }
 
         self.sort_entries();
+        self.entries.dedup();
     }
 
     /// Convert ip address to string taking name resolution into account
@@ -429,6 +449,26 @@ impl App {
             }
         });
     }
+
+    fn find_previous_entry(&self, entry: &ConnectionEntry) -> Option<&ConnectionEntry> {
+        for window in self.entries.windows(2) {
+            let (prev, curr) = (&window[0], &window[1]);
+            if curr == entry {
+                return Some(prev);
+            }
+        }
+        None
+    }
+
+    fn find_next_entry(&self, entry: &ConnectionEntry) -> Option<&ConnectionEntry> {
+        for window in self.entries.windows(2) {
+            let (curr, next) = (&window[0], &window[1]);
+            if curr == entry {
+                return Some(next);
+            }
+        }
+        None
+    }
 }
 
 /// Compare strings, but always push empty strings to the end
@@ -450,44 +490,18 @@ fn string_compare_with_empty(a: &str, b: &str, sort_order: SortOrder) -> Orderin
 }
 
 fn remote_port_compare(a: u16, b: u16, sort_order: SortOrder) -> Ordering {
-match sort_order {
-    SortOrder::Asc => match (a == 0, b == 0)  {
+    match sort_order {
+        SortOrder::Asc => match (a == 0, b == 0) {
             (true, true) => std::cmp::Ordering::Equal,
             (true, false) => std::cmp::Ordering::Greater,
             (false, true) => std::cmp::Ordering::Less,
             (false, false) => a.cmp(&b),
-    },
-    SortOrder::Desc => match (a == 0, b == 0) {
+        },
+        SortOrder::Desc => match (a == 0, b == 0) {
             (true, true) => std::cmp::Ordering::Equal,
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
             (false, false) => a.cmp(&b),
         },
-}
-}
-
-fn find_previous<T, F>(vec: &[T], predicate: F) -> Option<&T>
-where
-    F: Fn(&T) -> bool,
-{
-    for window in vec.windows(2) {
-        let (prev, curr) = (&window[0], &window[1]);
-        if predicate(curr) {
-            return Some(prev);
-        }
     }
-    None
-}
-
-fn find_next<T, F>(vec: &[T], predicate: F) -> Option<&T>
-where
-    F: Fn(&T) -> bool,
-{
-    for window in vec.windows(2) {
-        let (curr, next) = (&window[0], &window[1]);
-        if predicate(curr) {
-            return Some(next);
-        }
-    }
-    None
 }
