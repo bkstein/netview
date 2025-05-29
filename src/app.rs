@@ -3,11 +3,10 @@ use netstat2::{
 };
 use num_enum::TryFromPrimitive;
 use std::{
+    cell::Cell,
     cmp::Ordering,
     collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
     net::IpAddr,
-    ops::Deref,
     time::Instant,
 };
 use sysinfo::System;
@@ -80,14 +79,21 @@ impl Eq for ConnectionEntry {}
 
 impl ConnectionEntry {
     pub fn get_id(&self) -> String {
-        // let mut hasher = fxhash::FxHasher::default();
-        // self.hash(&mut hasher);
-        // hasher.finish()
         format!(
             "{}:{}:{}:{}",
             self.local_port, self.remote_port, self.pid, self.proto
         )
     }
+}
+
+#[derive(Eq, PartialEq, Debug)]
+pub enum UiState {
+    /// Showing the main frame containing the connections table
+    ConnectionTable,
+    /// Showing the help page
+    Help,
+    /// Showing info about the process of the selected connection
+    ProcessInfo,
 }
 
 /// Application.
@@ -100,7 +106,7 @@ pub struct App {
     /// Current connection entries
     pub entries: Vec<ConnectionEntry>,
     /// Vertical scroll position
-    pub scroll: usize,
+    pub scroll: Cell<usize>,
     /// true, if table updates are suspended
     pub paused: bool,
     /// The column used to sort table lines
@@ -121,6 +127,10 @@ pub struct App {
     dns_cache: HashMap<IpAddr, String>,
     /// Selected network connection
     pub selected: Option<ConnectionEntry>,
+    /// Index of the selected `ConnectionEntry`
+    pub selected_index: Option<usize>,
+    /// Ui state
+    pub ui_state: UiState,
 }
 
 impl Default for App {
@@ -129,7 +139,7 @@ impl Default for App {
             running: true,
             events: EventHandler::new(),
             entries: vec![],
-            scroll: 0,
+            scroll: Cell::new(0),
             paused: false,
             sort_column: SortColumn::LocalPort,
             sort_order: SortOrder::Asc,
@@ -140,6 +150,8 @@ impl Default for App {
             show_process_info: false,
             dns_cache: HashMap::new(),
             selected: None,
+            selected_index: None,
+            ui_state: UiState::ConnectionTable,
         }
     }
 }
@@ -176,7 +188,7 @@ impl App {
                     AppEvent::ToggleDnsResolution => self.toggle_dns_resolution(),
                     AppEvent::Sort(sort_column) => self.sort_by_column(sort_column),
                     AppEvent::ShowHelp => self.show_help(),
-                    AppEvent::ToggleProcessInfo => self.toggle_process_info(),
+                    AppEvent::ShowProcessInfo => self.show_process_info(),
                 },
             }
         }
@@ -188,6 +200,7 @@ impl App {
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
             KeyCode::Pause | KeyCode::Char(' ') => self.events.send(AppEvent::Pause),
+            KeyCode::Enter => self.events.send(AppEvent::ShowProcessInfo),
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
             }
@@ -195,11 +208,10 @@ impl App {
             KeyCode::Down => self.events.send(AppEvent::ScrollDownSelection),
             KeyCode::PageUp => self.events.send(AppEvent::ScrollUpPage),
             KeyCode::PageDown => self.events.send(AppEvent::ScrollDownPage),
-            KeyCode::Char('v' | 'V') => self.events.send(AppEvent::ToggleIpVersion),
+            KeyCode::Char('i' | 'I') => self.events.send(AppEvent::ToggleIpVersion),
             KeyCode::Char('p' | 'P') => self.events.send(AppEvent::ToggleProtoVersion),
             KeyCode::Char('d' | 'D') => self.events.send(AppEvent::ToggleDnsResolution),
             KeyCode::Char('h' | 'H') => self.events.send(AppEvent::ShowHelp),
-            KeyCode::Char('i' | 'I') => self.events.send(AppEvent::ToggleProcessInfo),
             KeyCode::Char('1') => self
                 .events
                 .send(AppEvent::Sort(SortColumn::try_from_primitive(1)?)),
@@ -235,14 +247,17 @@ impl App {
     /// The tick event is where you can update the state of your application with any logic that
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
     fn tick(&mut self) {
-        if !self.paused {
+        if !self.paused && self.ui_state == UiState::ConnectionTable {
             self.update_connection_entries();
         }
     }
 
     /// Set running to false to quit the application.
     fn quit(&mut self) {
-        self.running = false;
+        match self.ui_state {
+            UiState::ConnectionTable => self.running = false,
+            UiState::Help | UiState::ProcessInfo => self.ui_state = UiState::ConnectionTable,
+        }
     }
 
     /// Suspend table updates
@@ -262,6 +277,11 @@ impl App {
         } else {
             self.selected = self.entries.first().cloned();
         }
+
+        self.selected_index = self
+            .entries
+            .iter()
+            .position(|entry| Some(entry) == self.selected.as_ref());
     }
 
     fn scroll_down_selection(&mut self) {
@@ -276,6 +296,11 @@ impl App {
         } else {
             self.selected = self.entries.first().cloned();
         }
+
+        self.selected_index = self
+            .entries
+            .iter()
+            .position(|entry| Some(entry) == self.selected.as_ref());
     }
 
     fn scroll_up_page(&mut self) {}
@@ -311,13 +336,13 @@ impl App {
         } else {
             self.sort_column = sort_column;
         }
-        self.sort_entries();
+        self.sort_entries_by_column();
     }
 
     fn show_help(&mut self) {}
 
-    fn toggle_process_info(&mut self) {
-        self.show_process_info = !self.show_process_info;
+    fn show_process_info(&mut self) {
+        self.ui_state = UiState::ProcessInfo;
     }
 
     fn update_connection_entries(&mut self) {
@@ -325,7 +350,7 @@ impl App {
         let proto_flags = ProtocolFlags::TCP | ProtocolFlags::UDP;
 
         let mut sys = System::new_all();
-        sys.refresh_processes();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
         self.entries = vec![];
 
@@ -334,7 +359,7 @@ impl App {
                 let pid = conn.associated_pids.first().copied().unwrap_or(0);
                 let proc_name = sys
                     .process(sysinfo::Pid::from_u32(pid))
-                    .map(|p| p.name().to_string())
+                    .map(|p| p.name().to_string_lossy().to_string())
                     .unwrap_or_default();
 
                 match conn.protocol_socket_info {
@@ -343,7 +368,11 @@ impl App {
                             let local_ip = self.ip_to_string(&tcp.local_addr);
                             let remote_ip = self.ip_to_string(&tcp.remote_addr);
                             self.entries.push(ConnectionEntry {
-                                proto: "TCP".into(),
+                                proto: if tcp.local_addr.is_ipv4() {
+                                    "TCP".into()
+                                } else {
+                                    "TCP".into()
+                                },
                                 local_ip,
                                 local_port: tcp.local_port,
                                 remote_ip,
@@ -359,7 +388,11 @@ impl App {
                         if self.show_connection(&conn) {
                             let local_ip = self.ip_to_string(&udp.local_addr);
                             self.entries.push(ConnectionEntry {
-                                proto: "UDP".into(),
+                                proto: if udp.local_addr.is_ipv4() {
+                                    "UDP".into()
+                                } else {
+                                    "UDP".into()
+                                },
                                 local_ip,
                                 local_port: udp.local_port,
                                 remote_ip: "".into(),
@@ -375,8 +408,9 @@ impl App {
             }
         }
 
-        self.sort_entries();
+        self.entries.sort();
         self.entries.dedup();
+        self.sort_entries_by_column();
     }
 
     /// Convert ip address to string taking name resolution into account
@@ -429,7 +463,7 @@ impl App {
         true
     }
 
-    fn sort_entries(&mut self) {
+    fn sort_entries_by_column(&mut self) {
         use SortColumn::*;
         self.entries.sort_by(|a, b| {
             let ord = match self.sort_column {

@@ -46,7 +46,7 @@ pub enum AppEvent {
     /// Show the help page
     ShowHelp,
     /// Show info about the process of a connection
-    ToggleProcessInfo,
+    ShowProcessInfo,
     /// Toggle display of ipv4/ipv6 connections
     ToggleIpVersion,
     /// Toggle display of tcp/udp connections
