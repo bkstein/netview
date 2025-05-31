@@ -2,13 +2,7 @@ use netstat2::{
     AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, SocketInfo, get_sockets_info,
 };
 use num_enum::TryFromPrimitive;
-use std::{
-    cell::Cell,
-    cmp::Ordering,
-    collections::HashMap,
-    net::IpAddr,
-    time::Instant,
-};
+use std::{cell::Cell, cmp::Ordering, collections::HashMap, net::IpAddr, time::Instant};
 use sysinfo::System;
 
 use crate::event::{AppEvent, Event, EventHandler};
@@ -105,16 +99,20 @@ pub struct App {
     pub events: EventHandler,
     /// Current connection entries
     pub entries: Vec<ConnectionEntry>,
-    /// Vertical scroll position
-    pub scroll: Cell<usize>,
+    /// Vertical scroll position of connection table
+    pub scroll_connection_table: Cell<usize>,
+    /// Length of process info list
+    pub process_info_list_length: Cell<usize>,
+    /// Vertical scroll position of process info
+    pub scroll_process_info: Cell<usize>,
     /// true, if table updates are suspended
     pub paused: bool,
     /// The column used to sort table lines
     pub sort_column: SortColumn,
     /// Sort ascending or descending
     pub sort_order: SortOrder,
-    /// The visible height of the table
-    pub visible_height: usize,
+    /// The visible height of the tables
+    pub visible_table_height: Cell<usize>,
     /// Filter connections by ip version
     pub ip_version_filter: IpVersionFilter,
     /// Filter connections by protocol
@@ -139,11 +137,13 @@ impl Default for App {
             running: true,
             events: EventHandler::new(),
             entries: vec![],
-            scroll: Cell::new(0),
+            scroll_connection_table: Cell::new(0),
+            process_info_list_length: Cell::new(0),
+            scroll_process_info: Cell::new(0),
             paused: false,
             sort_column: SortColumn::LocalPort,
             sort_order: SortOrder::Asc,
-            visible_height: 0,
+            visible_table_height: Cell::new(0),
             ip_version_filter: IpVersionFilter::Ipv4AndIpv6,
             protocol_filter: ProtocolFilter::TcpAndUdp,
             resolve_address_names: false,
@@ -256,7 +256,13 @@ impl App {
     fn quit(&mut self) {
         match self.ui_state {
             UiState::ConnectionTable => self.running = false,
-            UiState::Help | UiState::ProcessInfo => self.ui_state = UiState::ConnectionTable,
+            UiState::Help => {
+                self.ui_state = UiState::ConnectionTable;
+            }
+            UiState::ProcessInfo => {
+                self.scroll_process_info.set(0);
+                self.ui_state = UiState::ConnectionTable;
+            }
         }
     }
 
@@ -266,6 +272,14 @@ impl App {
     }
 
     fn scroll_up_selection(&mut self) {
+        match self.ui_state {
+            UiState::ConnectionTable => self.scroll_up_connections(),
+            UiState::Help => {}
+            UiState::ProcessInfo => self.scroll_up_process_info(),
+        }
+    }
+
+    fn scroll_up_connections(&mut self) {
         if self.entries.is_empty() {
             return;
         }
@@ -284,7 +298,23 @@ impl App {
             .position(|entry| Some(entry) == self.selected.as_ref());
     }
 
+    fn scroll_up_process_info(&mut self) {
+        let current_scroll_position = self.scroll_process_info.get();
+        if current_scroll_position > 0 {
+            self.scroll_process_info
+                .set(current_scroll_position.saturating_sub(1));
+        }
+    }
+
     fn scroll_down_selection(&mut self) {
+        match self.ui_state {
+            UiState::ConnectionTable => self.scroll_down_connections(),
+            UiState::Help => {}
+            UiState::ProcessInfo => self.scroll_down_process_info(),
+        }
+    }
+
+    fn scroll_down_connections(&mut self) {
         if self.entries.is_empty() {
             return;
         }
@@ -301,6 +331,18 @@ impl App {
             .entries
             .iter()
             .position(|entry| Some(entry) == self.selected.as_ref());
+    }
+
+    fn scroll_down_process_info(&mut self) {
+        let current_scroll_position = self.scroll_process_info.get();
+        if current_scroll_position
+            < self
+                .process_info_list_length
+                .get()
+                .saturating_sub(self.visible_table_height.get())
+        {
+            self.scroll_process_info.set(current_scroll_position + 1);
+        }
     }
 
     fn scroll_up_page(&mut self) {}

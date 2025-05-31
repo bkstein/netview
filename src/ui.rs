@@ -6,8 +6,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Row, Table, Widget},
 };
-use std::{time::Duration};
-use sysinfo::{Pid, ProcessesToUpdate, ProcessRefreshKind};
+use std::time::Duration;
+use sysinfo::Pid;
 
 use crate::app::{App, SortColumn, SortOrder};
 
@@ -103,8 +103,8 @@ impl App {
 
     fn render_connection_table(&self, area: Rect, buf: &mut Buffer) {
         let table_height = area.height as usize;
-
-        let visible_height = table_height.saturating_sub(2);
+        let visible_table_height = table_height.saturating_sub(2);
+        self.visible_table_height.set(visible_table_height);
 
         let rows = self.entries_to_rows();
         let header = render_header(self.sort_column, self.sort_order);
@@ -116,14 +116,15 @@ impl App {
         };
 
         if let Some(index) = self.selected_index {
-            if self.scroll.get() > index {
-                self.scroll.set(index);
-            } else if self.scroll.get() + (visible_height - 1) <= index {
-                self.scroll.set(index - (visible_height - 1) + 1);
+            if self.scroll_connection_table.get() > index {
+                self.scroll_connection_table.set(index);
+            } else if self.scroll_connection_table.get() + (visible_table_height - 1) <= index {
+                self.scroll_connection_table
+                    .set(index - (visible_table_height - 1) + 1);
             }
         };
-        let rows_to_show =
-            &rows[self.scroll.get()..(self.scroll.get() + visible_height).min(rows.len())];
+        let rows_to_show = &rows[self.scroll_connection_table.get()
+            ..(self.scroll_connection_table.get() + visible_table_height).min(rows.len())];
         let table = Table::new(
             rows_to_show.iter().cloned(),
             [
@@ -148,13 +149,23 @@ impl App {
     }
 
     fn render_process_info(&self, area: Rect, buf: &mut Buffer) {
+        let table_height = area.height as usize;
+        self.visible_table_height
+            .set(table_height.saturating_sub(1));
+
         if let Some(selection) = &self.selected {
             let rows = process_info_to_rows(Pid::from_u32(selection.pid));
+            self.process_info_list_length.set(rows.len());
 
             let title = "Process Info";
 
+            let scroll_position = self.scroll_process_info.get().min(rows.len() - 1);
+
+            let rows_to_show = &rows[scroll_position
+                ..(scroll_position + self.visible_table_height.get()).min(rows.len())];
+
             let table = Table::new(
-                rows.iter().cloned(),
+                rows_to_show.iter().cloned(),
                 [
                     Constraint::Length(15),  // Process property
                     Constraint::Length(100), // Value
@@ -200,25 +211,18 @@ fn render_header(sort_col: SortColumn, sort_order: SortOrder) -> Row<'static> {
 }
 
 fn process_info_to_rows(pid: Pid) -> Vec<Row<'static>> {
-    let mut system = sysinfo::System::new_all();
-    // Wait a bit because CPU usage is based on diff.
-    std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
-    // Refresh CPU usage to get actual value.
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::nothing().with_cpu()
-    );
+    let system = sysinfo::System::new_all();
 
     let normal = Style::default();
     if let Some(process) = system.process(pid) {
         let process_name = process.name().to_string_lossy().to_string();
         let pid_u32 = pid.as_u32();
-        let cmdline = process.cmd()
-        .iter()
-        .map(|s| s.to_string_lossy())  // Cow<str>
-        .collect::<Vec<_>>()
-        .join(" ");
+        let cmdline = process
+            .cmd()
+            .iter()
+            .map(|s| s.to_string_lossy()) // Cow<str>
+            .collect::<Vec<_>>()
+            .join(" ");
         let path = process
             .exe()
             .map(|s| s.to_string_lossy().to_string())
@@ -236,8 +240,6 @@ fn process_info_to_rows(pid: Pid) -> Vec<Row<'static>> {
             .to_string();
         let run_time = format_duration(Duration::from_secs(process.run_time())).to_string();
 
-        let cpu_usage = format!("{:.2} %", process.cpu_usage());
-
         let mut process_info = vec![
             ("Name:", process_name),
             ("Pid:", pid_u32.to_string()),
@@ -248,7 +250,6 @@ fn process_info_to_rows(pid: Pid) -> Vec<Row<'static>> {
             ("Virtual memory:", vmem),
             ("Started:", started),
             ("Run time:", run_time),
-            ("CPU %:", cpu_usage),
         ];
         for env in process.environ() {
             process_info.push(("env", env.to_string_lossy().to_string()));
