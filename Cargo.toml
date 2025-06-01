@@ -14,7 +14,7 @@ crossterm = { version = "0.28.1", features = ["event-stream"] }
 dns-lookup = "2"
 futures = "0.3.31"
 humantime = "2.1"
-netstat2 = "0.9"
+netstat2 = "0.11"
 num_enum = "0.7"
 pprof = { version = "0.11", features = ["flamegraph", "protobuf"] }
 ratatui = "0.29.0"
