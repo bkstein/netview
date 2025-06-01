@@ -4,7 +4,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Cell, Row, Table, Widget},
+    widgets::{Block, BorderType, Borders, Cell, Row, Table, Widget},
 };
 use std::time::Duration;
 use sysinfo::Pid;
@@ -107,7 +107,7 @@ impl App {
         self.visible_table_height.set(visible_table_height);
 
         let rows = self.entries_to_rows();
-        let header = render_header(self.sort_column, self.sort_order);
+        let header = render_connections_header(self.sort_column, self.sort_order);
 
         let connections_title = if self.paused {
             "Connections (paused - press 'SPACE' to resume)"
@@ -152,6 +152,7 @@ impl App {
         let table_height = area.height as usize;
         self.visible_table_height
             .set(table_height.saturating_sub(1));
+        let visible_table_width = area.width.saturating_sub(2);
 
         if let Some(selection) = &self.selected {
             let rows = process_info_to_rows(Pid::from_u32(selection.pid));
@@ -164,21 +165,29 @@ impl App {
             let rows_to_show = &rows[scroll_position
                 ..(scroll_position + self.visible_table_height.get()).min(rows.len())];
 
+            let column_width_property = 15;
+            let column_width_value = visible_table_width.saturating_sub(column_width_property + 1);
+
             let table = Table::new(
                 rows_to_show.iter().cloned(),
                 [
-                    Constraint::Length(15),  // Process property
-                    Constraint::Length(100), // Value
+                    Constraint::Length(column_width_property),  // Process property
+                    Constraint::Length(column_width_value), // Value
                 ],
             )
-            .block(Block::default().title(title).borders(Borders::ALL));
+            .block(
+                Block::default()
+                    .title(title)
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Double),
+            );
 
             table.render(area, buf);
         }
     }
 }
 
-fn render_header(sort_col: SortColumn, sort_order: SortOrder) -> Row<'static> {
+fn render_connections_header(sort_col: SortColumn, sort_order: SortOrder) -> Row<'static> {
     use SortColumn::*;
 
     let arrow = match sort_order {
@@ -212,11 +221,30 @@ fn render_header(sort_col: SortColumn, sort_order: SortOrder) -> Row<'static> {
 
 fn process_info_to_rows(pid: Pid) -> Vec<Row<'static>> {
     let system = sysinfo::System::new_all();
+    let users = sysinfo::Users::new_with_refreshed_list();
 
     let normal = Style::default();
     if let Some(process) = system.process(pid) {
         let process_name = process.name().to_string_lossy().to_string();
         let pid_u32 = pid.as_u32();
+        let user = if let Some(user_id) = process.user_id() {
+            if let Some(user) = users.get_user_by_id(user_id) {
+                format!("{}", user.name())
+            } else {
+                format!("unknown")
+            }
+        } else {
+            format!("unkown")
+        };
+        let effective_user = if let Some(user_id) = process.effective_user_id() {
+            if let Some(user) = users.get_user_by_id(user_id) {
+                format!("{}", user.name())
+            } else {
+                format!("unknown")
+            }
+        } else {
+            format!("unkown")
+        };
         let cmdline = process
             .cmd()
             .iter()
@@ -239,10 +267,13 @@ fn process_info_to_rows(pid: Pid) -> Vec<Row<'static>> {
             .unwrap_or_default()
             .to_string();
         let run_time = format_duration(Duration::from_secs(process.run_time())).to_string();
+        let status = process.status().to_string();
 
         let mut process_info = vec![
             ("Name:", process_name),
             ("Pid:", pid_u32.to_string()),
+            ("User:", user),
+            ("Effective user:", effective_user),
             ("Path:", path),
             ("Command line:", cmdline),
             ("Working dir:", cwd),
@@ -250,6 +281,7 @@ fn process_info_to_rows(pid: Pid) -> Vec<Row<'static>> {
             ("Virtual memory:", vmem),
             ("Started:", started),
             ("Run time:", run_time),
+            ("Status:", status),
         ];
         for env in process.environ() {
             process_info.push(("env", env.to_string_lossy().to_string()));
