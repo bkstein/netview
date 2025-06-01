@@ -199,11 +199,11 @@ impl App {
     pub fn handle_key_events(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
-            KeyCode::Pause | KeyCode::Char(' ') => self.events.send(AppEvent::Pause),
-            KeyCode::Enter => self.events.send(AppEvent::ShowProcessInfo),
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
             }
+            KeyCode::Pause | KeyCode::Char(' ') => self.events.send(AppEvent::Pause),
+            KeyCode::Enter => self.events.send(AppEvent::ShowProcessInfo),
             KeyCode::Up => self.events.send(AppEvent::ScrollUpSelection),
             KeyCode::Down => self.events.send(AppEvent::ScrollDownSelection),
             KeyCode::PageUp => self.events.send(AppEvent::ScrollUpPage),
