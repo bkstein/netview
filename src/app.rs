@@ -44,7 +44,7 @@ pub enum ProtocolFilter {
     TcpAndUdp,
 }
 
-#[derive(Clone, Debug, Ord, PartialOrd, Hash)]
+#[derive(Clone, Debug, Ord, PartialOrd)]
 pub struct ConnectionEntry {
     pub proto: String,
     pub local_ip: String,
@@ -163,6 +163,7 @@ impl App {
     }
 
     /// Run the application's main loop.
+    #[allow(clippy::single_match)]
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
         while self.running {
             terminal.draw(|frame|
@@ -411,9 +412,9 @@ impl App {
                             let remote_ip = self.ip_to_string(&tcp.remote_addr);
                             self.entries.push(ConnectionEntry {
                                 proto: if tcp.local_addr.is_ipv4() {
-                                    "TCP".into()
+                                    "TCPv4".into()
                                 } else {
-                                    "TCP".into()
+                                    "TCPv6".into()
                                 },
                                 local_ip,
                                 local_port: tcp.local_port,
@@ -431,9 +432,9 @@ impl App {
                             let local_ip = self.ip_to_string(&udp.local_addr);
                             self.entries.push(ConnectionEntry {
                                 proto: if udp.local_addr.is_ipv4() {
-                                    "UDP".into()
+                                    "UDPv4".into()
                                 } else {
-                                    "UDP".into()
+                                    "UDPv6".into()
                                 },
                                 local_ip,
                                 local_port: udp.local_port,
@@ -458,7 +459,7 @@ impl App {
     /// Convert ip address to string taking name resolution into account
     fn ip_to_string(&mut self, ip: &IpAddr) -> String {
         if self.resolve_address_names {
-            self.resolve_dns(ip.clone())
+            self.resolve_dns(*ip)
         } else {
             ip.to_string()
         }

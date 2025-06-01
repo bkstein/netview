@@ -229,21 +229,21 @@ fn process_info_to_rows(pid: Pid) -> Vec<Row<'static>> {
         let pid_u32 = pid.as_u32();
         let user = if let Some(user_id) = process.user_id() {
             if let Some(user) = users.get_user_by_id(user_id) {
-                format!("{}", user.name())
+                user.name().to_string()
             } else {
-                format!("unknown")
+                "unknown".to_string()
             }
         } else {
-            format!("unkown")
+            "unkown".to_string()
         };
         let effective_user = if let Some(user_id) = process.effective_user_id() {
             if let Some(user) = users.get_user_by_id(user_id) {
-                format!("{}", user.name())
+                user.name().to_string()
             } else {
-                format!("unknown")
+                "unknown".to_string()
             }
         } else {
-            format!("unkown")
+            "unkown".to_string()
         };
         let cmdline = process
             .cmd()
