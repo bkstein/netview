@@ -171,8 +171,8 @@ impl App {
             let table = Table::new(
                 rows_to_show.iter().cloned(),
                 [
-                    Constraint::Length(column_width_property),  // Process property
-                    Constraint::Length(column_width_value), // Value
+                    Constraint::Length(column_width_property), // Process property
+                    Constraint::Length(column_width_value),    // Value
                 ],
             )
             .block(
