@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use crate::app::SortColumn;
 
 /// The frequency at which tick events are emitted.
-const TICK_FPS: f64 = 30.0;
+const TICK_FPS: f64 = 1.0; // 30.0;
 
 /// Representation of all possible events.
 #[derive(Clone, Debug)]

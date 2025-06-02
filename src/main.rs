@@ -18,6 +18,7 @@ async fn main() -> color_eyre::Result<()> {
     crossterm::terminal::enable_raw_mode()?;
     let terminal = ratatui::init();
     let result = App::new().run(terminal).await;
+    crossterm::terminal::disable_raw_mode()?;
     ratatui::restore();
 
     if let Some(guard) = guard {
