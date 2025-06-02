@@ -10,7 +10,7 @@ edition = "2024"
 bytesize = "1.3"
 chrono = "0.4"
 color-eyre = "0.6.3"
-crossterm = { version = "0.28.1", features = ["event-stream"] }
+crossterm = { version = "0.29.0", features = ["event-stream"] }
 dns-lookup = "2"
 futures = "0.3.31"
 humantime = "2.1"
