@@ -15,6 +15,7 @@ Show network connections on your local computer. This application was inspired b
 | h     | Show help (not implemented, yet) |
 | ↑ ↓   | Select connection (scrolls table) |
 | ENTER | Show process info |
+| SPACE | Suspend connection table updates |
 | q, Ctrl-c,ESC | Quit |
 
 
