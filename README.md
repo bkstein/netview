@@ -1,6 +1,6 @@
 # netview
 
-Show network connections on your local computer. This application was inspired by Mark Russinovich's [tcpview].
+Show live network connections on your local computer. This application was inspired by Mark Russinovich's [tcpview].
 
 ## Show active network connections
 
