@@ -6,8 +6,9 @@ use tokio::sync::mpsc;
 
 use crate::app::SortColumn;
 
-/// The frequency at which tick events are emitted.
-const TICK_FPS: f64 = 1.0; // 30.0;
+/// The frequency at which tick events are emitted (for background connection list refresh).
+/// Kept low so scrolling and other input stay responsive.
+const TICK_FPS: f64 = 0.5;
 
 /// Representation of all possible events.
 #[derive(Clone, Debug)]

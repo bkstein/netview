@@ -2,9 +2,10 @@ use chrono::DateTime;
 use humantime::format_duration;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, BorderType, Borders, Cell, Row, Table, Widget},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, Widget, Wrap},
 };
 use std::time::Duration;
 use sysinfo::Pid;
@@ -16,7 +17,7 @@ impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
         match self.ui_state {
             crate::app::UiState::ConnectionTable => self.render_connection_table(area, buf),
-            crate::app::UiState::Help => self.render_connection_table(area, buf),
+            crate::app::UiState::Help => self.render_help_overlay(area, buf),
             crate::app::UiState::ProcessInfo => self.render_process_info(area, buf),
         }
     }
@@ -148,6 +149,72 @@ impl App {
         table.render(area, buf);
     }
 
+    fn render_help_overlay(&self, area: Rect, buf: &mut Buffer) {
+        self.render_connection_table(area, buf);
+        let help_width = 46u16;
+        let help_height = 20u16;
+        let vertical = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(help_height),
+                Constraint::Min(0),
+            ])
+            .split(area);
+        let horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(help_width),
+                Constraint::Min(0),
+            ])
+            .split(vertical[1]);
+        let help_area = horizontal[1];
+        let overlay_style = Style::default().bg(Color::Black);
+        Clear.render(help_area, buf);
+        for y in help_area.top()..help_area.bottom() {
+            buf.set_string(
+                help_area.x,
+                y,
+                " ".repeat(help_area.width as usize),
+                overlay_style,
+            );
+        }
+        let help_text = vec![
+            Line::from(vec![
+                Span::styled(" Key ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw("    Action"),
+            ]),
+            Line::from(""),
+            Line::from(" q, Esc   Quit"),
+            Line::from(" Space    Pause / resume list updates"),
+            Line::from(" Enter    Show process info"),
+            Line::from(" ↑ / ↓    Move selection"),
+            Line::from(" PgUp/Dn  Scroll by page"),
+            Line::from(" i        Toggle IPv4 / IPv6 filter"),
+            Line::from(" p        Toggle TCP / UDP filter"),
+            Line::from(" d        Toggle DNS resolution"),
+            Line::from(" h        This help"),
+            Line::from(" 1-8      Sort by column"),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                " Press q or Esc to close ",
+                Style::default().fg(Color::DarkGray),
+            )]),
+        ];
+        let paragraph = Paragraph::new(help_text)
+            .block(
+                Block::default()
+                    .title(" Help ")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .style(overlay_style),
+            )
+            .style(overlay_style)
+            .wrap(Wrap { trim: true });
+        paragraph.render(help_area, buf);
+    }
+
     fn render_process_info(&self, area: Rect, buf: &mut Buffer) {
         let table_height = area.height as usize;
         self.visible_table_height
@@ -155,7 +222,19 @@ impl App {
         let visible_table_width = area.width.saturating_sub(2);
 
         if let Some(selection) = &self.selected {
-            let rows = process_info_to_rows(Pid::from_u32(selection.pid));
+            let pid = selection.pid;
+            let cache_hit = self
+                .process_info_cache
+                .borrow()
+                .as_ref()
+                .is_some_and(|(cached_pid, _)| *cached_pid == pid);
+            let rows = if cache_hit {
+                self.process_info_cache.borrow().as_ref().unwrap().1.clone()
+            } else {
+                let new_rows = process_info_to_rows(Pid::from_u32(pid));
+                *self.process_info_cache.borrow_mut() = Some((pid, new_rows.clone()));
+                new_rows
+            };
             self.process_info_list_length.set(rows.len());
 
             let title = "Process Info";

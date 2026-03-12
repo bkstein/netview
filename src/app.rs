@@ -2,13 +2,20 @@ use netstat2::{
     AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, SocketInfo, get_sockets_info,
 };
 use num_enum::TryFromPrimitive;
-use std::{cell::Cell, cmp::Ordering, collections::HashMap, net::IpAddr, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    cmp::Ordering,
+    collections::HashMap,
+    net::IpAddr,
+    time::{Duration, Instant},
+};
 use sysinfo::System;
 
 use crate::event::{AppEvent, Event, EventHandler};
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    widgets::Row,
 };
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, TryFromPrimitive)]
@@ -129,6 +136,12 @@ pub struct App {
     pub selected_index: Option<usize>,
     /// Ui state
     pub ui_state: UiState,
+    /// Last time the connection list was refreshed (for throttling).
+    last_connection_refresh: RefCell<Option<Instant>>,
+    /// Last time the user pressed a key (skip heavy refresh while actively scrolling).
+    last_user_input: RefCell<Option<Instant>>,
+    /// Cached process info rows by PID so scrolling doesn't recompute every frame.
+    pub(crate) process_info_cache: RefCell<Option<(u32, Vec<Row<'static>>)>>,
 }
 
 impl Default for App {
@@ -152,6 +165,9 @@ impl Default for App {
             selected: None,
             selected_index: None,
             ui_state: UiState::ConnectionTable,
+            last_connection_refresh: RefCell::new(None),
+            last_user_input: RefCell::new(None),
+            process_info_cache: RefCell::new(None),
         }
     }
 }
@@ -165,33 +181,50 @@ impl App {
     /// Run the application's main loop.
     #[allow(clippy::single_match)]
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
+        if self.ui_state == UiState::ConnectionTable && !self.paused {
+            self.update_connection_entries();
+            *self.last_connection_refresh.borrow_mut() = Some(Instant::now());
+        }
+        let mut should_draw = true;
         while self.running {
-            terminal.draw(|frame|
-                // At this point, a more complex ui could be rendered, e.g. by
-                // calling a function, that uses a layout. The current example
-                // directly renders a widget without any specified layout.
-                frame.render_widget(&self, frame.area()))?;
-            match self.events.next().await? {
-                Event::Tick => self.tick(),
-                Event::Crossterm(event) => match event {
-                    crossterm::event::Event::Key(key_event) => self.handle_key_events(key_event)?,
-                    _ => {}
-                },
-                Event::App(app_event) => match app_event {
-                    AppEvent::Quit => self.quit(),
-                    AppEvent::Pause => self.pause(),
-                    AppEvent::ScrollUpSelection => self.scroll_up_selection(),
-                    AppEvent::ScrollDownSelection => self.scroll_down_selection(),
-                    AppEvent::ScrollUpPage => self.scroll_up_page(),
-                    AppEvent::ScrollDownPage => self.scroll_down_page(),
-                    AppEvent::ToggleIpVersion => self.toggle_ip_version(),
-                    AppEvent::ToggleProtoVersion => self.toggle_proto_version(),
-                    AppEvent::ToggleDnsResolution => self.toggle_dns_resolution(),
-                    AppEvent::Sort(sort_column) => self.sort_by_column(sort_column),
-                    AppEvent::ShowHelp => self.show_help(),
-                    AppEvent::ShowProcessInfo => self.show_process_info(),
-                },
+            if should_draw {
+                terminal.draw(|frame|
+                    // At this point, a more complex ui could be rendered, e.g. by
+                    // calling a function, that uses a layout. The current example
+                    // directly renders a widget without any specified layout.
+                    frame.render_widget(&self, frame.area()))?;
             }
+            should_draw = match self.events.next().await? {
+                Event::Tick => self.tick(),
+                Event::Crossterm(event) => {
+                    match event {
+                        crossterm::event::Event::Key(key_event) => {
+                            self.record_user_input();
+                            self.handle_key_events(key_event)?;
+                        }
+                        _ => {}
+                    }
+                    true
+                }
+                Event::App(app_event) => {
+                    self.record_user_input();
+                    match app_event {
+                        AppEvent::Quit => self.quit(),
+                        AppEvent::Pause => self.pause(),
+                        AppEvent::ScrollUpSelection => self.scroll_up_selection(),
+                        AppEvent::ScrollDownSelection => self.scroll_down_selection(),
+                        AppEvent::ScrollUpPage => self.scroll_up_page(),
+                        AppEvent::ScrollDownPage => self.scroll_down_page(),
+                        AppEvent::ToggleIpVersion => self.toggle_ip_version(),
+                        AppEvent::ToggleProtoVersion => self.toggle_proto_version(),
+                        AppEvent::ToggleDnsResolution => self.toggle_dns_resolution(),
+                        AppEvent::Sort(sort_column) => self.sort_by_column(sort_column),
+                        AppEvent::ShowHelp => self.show_help(),
+                        AppEvent::ShowProcessInfo => self.show_process_info(),
+                    }
+                    true
+                }
+            };
         }
         Ok(())
     }
@@ -247,10 +280,45 @@ impl App {
     ///
     /// The tick event is where you can update the state of your application with any logic that
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
-    fn tick(&mut self) {
-        if !self.paused && self.ui_state == UiState::ConnectionTable {
-            self.update_connection_entries();
+    /// Returns true if the connection list was refreshed (caller should redraw).
+    fn tick(&mut self) -> bool {
+        if self.paused || self.ui_state != UiState::ConnectionTable {
+            return false;
         }
+        const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+        /// Skip heavy refresh shortly after user input so scrolling stays smooth.
+        const IDLE_BEFORE_REFRESH: Duration = Duration::from_millis(400);
+        let now = Instant::now();
+        if self.last_user_input.borrow().map_or(false, |t| {
+            now.saturating_duration_since(t) < IDLE_BEFORE_REFRESH
+        }) {
+            return false;
+        }
+        let should_refresh = self.last_connection_refresh.borrow().map_or(true, |t| {
+            now.saturating_duration_since(t) >= REFRESH_INTERVAL
+        });
+        if should_refresh {
+            self.update_connection_entries();
+            *self.last_connection_refresh.borrow_mut() = Some(Instant::now());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Records that the user pressed a key; used to defer heavy refresh while scrolling.
+    fn record_user_input(&self) {
+        *self.last_user_input.borrow_mut() = Some(Instant::now());
+    }
+
+    /// Refreshes the connection list immediately (e.g. after filter/setting changes) and updates
+    /// the throttle so the next tick does not refresh again right away.
+    fn refresh_connection_list(&mut self) {
+        if self.ui_state != UiState::ConnectionTable {
+            return;
+        }
+        self.update_connection_entries();
+        *self.last_connection_refresh.borrow_mut() = Some(Instant::now());
     }
 
     /// Set running to false to quit the application.
@@ -262,6 +330,7 @@ impl App {
             }
             UiState::ProcessInfo => {
                 self.scroll_process_info.set(0);
+                self.process_info_cache.replace(None);
                 self.ui_state = UiState::ConnectionTable;
             }
         }
@@ -346,9 +415,61 @@ impl App {
         }
     }
 
-    fn scroll_up_page(&mut self) {}
+    fn scroll_up_page(&mut self) {
+        match self.ui_state {
+            UiState::ConnectionTable => self.scroll_up_connections_page(),
+            UiState::Help => {}
+            UiState::ProcessInfo => self.scroll_up_process_info_page(),
+        }
+    }
 
-    fn scroll_down_page(&mut self) {}
+    fn scroll_down_page(&mut self) {
+        match self.ui_state {
+            UiState::ConnectionTable => self.scroll_down_connections_page(),
+            UiState::Help => {}
+            UiState::ProcessInfo => self.scroll_down_process_info_page(),
+        }
+    }
+
+    fn scroll_up_connections_page(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let page = self.visible_table_height.get().max(1);
+        let current = self.selected_index.unwrap_or(0);
+        let new_index = current.saturating_sub(page);
+        self.selected = Some(self.entries[new_index].clone());
+        self.selected_index = Some(new_index);
+    }
+
+    fn scroll_down_connections_page(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let page = self.visible_table_height.get().max(1);
+        let len = self.entries.len();
+        let current = self.selected_index.unwrap_or(0);
+        let new_index = (current + page).min(len.saturating_sub(1));
+        self.selected = Some(self.entries[new_index].clone());
+        self.selected_index = Some(new_index);
+    }
+
+    fn scroll_up_process_info_page(&mut self) {
+        let page = self.visible_table_height.get().max(1);
+        let current = self.scroll_process_info.get();
+        self.scroll_process_info.set(current.saturating_sub(page));
+    }
+
+    fn scroll_down_process_info_page(&mut self) {
+        let current = self.scroll_process_info.get();
+        let max_scroll = self
+            .process_info_list_length
+            .get()
+            .saturating_sub(self.visible_table_height.get());
+        let page = self.visible_table_height.get().max(1);
+        self.scroll_process_info
+            .set((current + page).min(max_scroll));
+    }
 
     fn toggle_ip_version(&mut self) {
         self.ip_version_filter = match self.ip_version_filter {
@@ -356,6 +477,7 @@ impl App {
             IpVersionFilter::Ipv6Only => IpVersionFilter::Ipv4AndIpv6,
             IpVersionFilter::Ipv4AndIpv6 => IpVersionFilter::Ipv4Only,
         };
+        self.refresh_connection_list();
     }
 
     fn toggle_proto_version(&mut self) {
@@ -364,10 +486,12 @@ impl App {
             ProtocolFilter::UdpOnly => ProtocolFilter::TcpAndUdp,
             ProtocolFilter::TcpAndUdp => ProtocolFilter::TcpOnly,
         };
+        self.refresh_connection_list();
     }
 
     fn toggle_dns_resolution(&mut self) {
         self.resolve_address_names = !self.resolve_address_names;
+        self.refresh_connection_list();
     }
 
     fn sort_by_column(&mut self, sort_column: SortColumn) {
@@ -382,7 +506,12 @@ impl App {
         self.sort_entries_by_column();
     }
 
-    fn show_help(&mut self) {}
+    fn show_help(&mut self) {
+        self.ui_state = match self.ui_state {
+            UiState::Help => UiState::ConnectionTable,
+            _ => UiState::Help,
+        };
+    }
 
     fn show_process_info(&mut self) {
         self.ui_state = UiState::ProcessInfo;
@@ -454,6 +583,32 @@ impl App {
         self.entries.sort();
         self.entries.dedup();
         self.sort_entries_by_column();
+        self.reconcile_selection_after_refresh();
+    }
+
+    /// Keeps selection in sync after the entries list has been refreshed (e.g. on tick).
+    /// If the previously selected connection still exists, it remains selected; otherwise
+    /// selection is moved to a valid row or cleared so the current line marker is not lost.
+    fn reconcile_selection_after_refresh(&mut self) {
+        if self.entries.is_empty() {
+            self.selected = None;
+            self.selected_index = None;
+            return;
+        }
+        let len = self.entries.len();
+        if let Some(ref prev_selected) = self.selected {
+            if let Some(idx) = self.entries.iter().position(|e| e == prev_selected) {
+                self.selected = Some(self.entries[idx].clone());
+                self.selected_index = Some(idx);
+                return;
+            }
+        }
+        // Selected connection no longer in list (or no selection): keep index if valid, else pick a valid one
+        let idx = self
+            .selected_index
+            .map_or(0, |i| i.min(len.saturating_sub(1)));
+        self.selected = Some(self.entries[idx].clone());
+        self.selected_index = Some(idx);
     }
 
     /// Convert ip address to string taking name resolution into account
