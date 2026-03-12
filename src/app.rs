@@ -137,6 +137,8 @@ pub struct App {
     pub ui_state: UiState,
     /// Last time the connection list was refreshed (for throttling).
     last_connection_refresh: RefCell<Option<Instant>>,
+    /// Last time the user pressed a key (skip heavy refresh while actively scrolling).
+    last_user_input: RefCell<Option<Instant>>,
 }
 
 impl Default for App {
@@ -161,6 +163,7 @@ impl Default for App {
             selected_index: None,
             ui_state: UiState::ConnectionTable,
             last_connection_refresh: RefCell::new(None),
+            last_user_input: RefCell::new(None),
         }
     }
 }
@@ -192,6 +195,7 @@ impl App {
                 Event::Crossterm(event) => {
                     match event {
                         crossterm::event::Event::Key(key_event) => {
+                            self.record_user_input();
                             self.handle_key_events(key_event)?;
                         }
                         _ => {}
@@ -199,6 +203,7 @@ impl App {
                     true
                 }
                 Event::App(app_event) => {
+                    self.record_user_input();
                     match app_event {
                         AppEvent::Quit => self.quit(),
                         AppEvent::Pause => self.pause(),
@@ -277,7 +282,16 @@ impl App {
             return false;
         }
         const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+        /// Skip heavy refresh shortly after user input so scrolling stays smooth.
+        const IDLE_BEFORE_REFRESH: Duration = Duration::from_millis(400);
         let now = Instant::now();
+        if self
+            .last_user_input
+            .borrow()
+            .map_or(false, |t| now.saturating_duration_since(t) < IDLE_BEFORE_REFRESH)
+        {
+            return false;
+        }
         let should_refresh = self
             .last_connection_refresh
             .borrow()
@@ -289,6 +303,21 @@ impl App {
         } else {
             false
         }
+    }
+
+    /// Records that the user pressed a key; used to defer heavy refresh while scrolling.
+    fn record_user_input(&self) {
+        *self.last_user_input.borrow_mut() = Some(Instant::now());
+    }
+
+    /// Refreshes the connection list immediately (e.g. after filter/setting changes) and updates
+    /// the throttle so the next tick does not refresh again right away.
+    fn refresh_connection_list(&mut self) {
+        if self.ui_state != UiState::ConnectionTable {
+            return;
+        }
+        self.update_connection_entries();
+        *self.last_connection_refresh.borrow_mut() = Some(Instant::now());
     }
 
     /// Set running to false to quit the application.
@@ -447,6 +476,7 @@ impl App {
             IpVersionFilter::Ipv6Only => IpVersionFilter::Ipv4AndIpv6,
             IpVersionFilter::Ipv4AndIpv6 => IpVersionFilter::Ipv4Only,
         };
+        self.refresh_connection_list();
     }
 
     fn toggle_proto_version(&mut self) {
@@ -455,10 +485,12 @@ impl App {
             ProtocolFilter::UdpOnly => ProtocolFilter::TcpAndUdp,
             ProtocolFilter::TcpAndUdp => ProtocolFilter::TcpOnly,
         };
+        self.refresh_connection_list();
     }
 
     fn toggle_dns_resolution(&mut self) {
         self.resolve_address_names = !self.resolve_address_names;
+        self.refresh_connection_list();
     }
 
     fn sort_by_column(&mut self, sort_column: SortColumn) {
