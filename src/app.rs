@@ -13,6 +13,7 @@ use sysinfo::System;
 
 use crate::event::{AppEvent, Event, EventHandler};
 use ratatui::{
+    widgets::Row,
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
 };
@@ -139,6 +140,8 @@ pub struct App {
     last_connection_refresh: RefCell<Option<Instant>>,
     /// Last time the user pressed a key (skip heavy refresh while actively scrolling).
     last_user_input: RefCell<Option<Instant>>,
+    /// Cached process info rows by PID so scrolling doesn't recompute every frame.
+    pub(crate) process_info_cache: RefCell<Option<(u32, Vec<Row<'static>>)>>,
 }
 
 impl Default for App {
@@ -164,6 +167,7 @@ impl Default for App {
             ui_state: UiState::ConnectionTable,
             last_connection_refresh: RefCell::new(None),
             last_user_input: RefCell::new(None),
+            process_info_cache: RefCell::new(None),
         }
     }
 }
@@ -329,6 +333,7 @@ impl App {
             }
             UiState::ProcessInfo => {
                 self.scroll_process_info.set(0);
+                self.process_info_cache.replace(None);
                 self.ui_state = UiState::ConnectionTable;
             }
         }

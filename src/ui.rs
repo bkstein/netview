@@ -221,7 +221,24 @@ impl App {
         let visible_table_width = area.width.saturating_sub(2);
 
         if let Some(selection) = &self.selected {
-            let rows = process_info_to_rows(Pid::from_u32(selection.pid));
+            let pid = selection.pid;
+            let cache_hit = self
+                .process_info_cache
+                .borrow()
+                .as_ref()
+                .is_some_and(|(cached_pid, _)| *cached_pid == pid);
+            let rows = if cache_hit {
+                self.process_info_cache
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .1
+                    .clone()
+            } else {
+                let new_rows = process_info_to_rows(Pid::from_u32(pid));
+                *self.process_info_cache.borrow_mut() = Some((pid, new_rows.clone()));
+                new_rows
+            };
             self.process_info_list_length.set(rows.len());
 
             let title = "Process Info";
