@@ -13,9 +13,9 @@ use sysinfo::System;
 
 use crate::event::{AppEvent, Event, EventHandler};
 use ratatui::{
-    widgets::Row,
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    widgets::Row,
 };
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, TryFromPrimitive)]
@@ -289,17 +289,14 @@ impl App {
         /// Skip heavy refresh shortly after user input so scrolling stays smooth.
         const IDLE_BEFORE_REFRESH: Duration = Duration::from_millis(400);
         let now = Instant::now();
-        if self
-            .last_user_input
-            .borrow()
-            .map_or(false, |t| now.saturating_duration_since(t) < IDLE_BEFORE_REFRESH)
-        {
+        if self.last_user_input.borrow().map_or(false, |t| {
+            now.saturating_duration_since(t) < IDLE_BEFORE_REFRESH
+        }) {
             return false;
         }
-        let should_refresh = self
-            .last_connection_refresh
-            .borrow()
-            .map_or(true, |t| now.saturating_duration_since(t) >= REFRESH_INTERVAL);
+        let should_refresh = self.last_connection_refresh.borrow().map_or(true, |t| {
+            now.saturating_duration_since(t) >= REFRESH_INTERVAL
+        });
         if should_refresh {
             self.update_connection_entries();
             *self.last_connection_refresh.borrow_mut() = Some(Instant::now());
@@ -460,8 +457,7 @@ impl App {
     fn scroll_up_process_info_page(&mut self) {
         let page = self.visible_table_height.get().max(1);
         let current = self.scroll_process_info.get();
-        self.scroll_process_info
-            .set(current.saturating_sub(page));
+        self.scroll_process_info.set(current.saturating_sub(page));
     }
 
     fn scroll_down_process_info_page(&mut self) {
@@ -601,18 +597,16 @@ impl App {
         }
         let len = self.entries.len();
         if let Some(ref prev_selected) = self.selected {
-            if let Some(idx) = self
-                .entries
-                .iter()
-                .position(|e| e == prev_selected)
-            {
+            if let Some(idx) = self.entries.iter().position(|e| e == prev_selected) {
                 self.selected = Some(self.entries[idx].clone());
                 self.selected_index = Some(idx);
                 return;
             }
         }
         // Selected connection no longer in list (or no selection): keep index if valid, else pick a valid one
-        let idx = self.selected_index.map_or(0, |i| i.min(len.saturating_sub(1)));
+        let idx = self
+            .selected_index
+            .map_or(0, |i| i.min(len.saturating_sub(1)));
         self.selected = Some(self.entries[idx].clone());
         self.selected_index = Some(idx);
     }

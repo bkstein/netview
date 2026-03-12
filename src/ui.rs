@@ -197,9 +197,10 @@ impl App {
             Line::from(" h        This help"),
             Line::from(" 1-8      Sort by column"),
             Line::from(""),
-            Line::from(vec![
-                Span::styled(" Press q or Esc to close ", Style::default().fg(Color::DarkGray)),
-            ]),
+            Line::from(vec![Span::styled(
+                " Press q or Esc to close ",
+                Style::default().fg(Color::DarkGray),
+            )]),
         ];
         let paragraph = Paragraph::new(help_text)
             .block(
@@ -228,12 +229,7 @@ impl App {
                 .as_ref()
                 .is_some_and(|(cached_pid, _)| *cached_pid == pid);
             let rows = if cache_hit {
-                self.process_info_cache
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .1
-                    .clone()
+                self.process_info_cache.borrow().as_ref().unwrap().1.clone()
             } else {
                 let new_rows = process_info_to_rows(Pid::from_u32(pid));
                 *self.process_info_cache.borrow_mut() = Some((pid, new_rows.clone()));
