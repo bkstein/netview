@@ -505,7 +505,12 @@ impl App {
         self.sort_entries_by_column();
     }
 
-    fn show_help(&mut self) {}
+    fn show_help(&mut self) {
+        self.ui_state = match self.ui_state {
+            UiState::Help => UiState::ConnectionTable,
+            _ => UiState::Help,
+        };
+    }
 
     fn show_process_info(&mut self) {
         self.ui_state = UiState::ProcessInfo;
