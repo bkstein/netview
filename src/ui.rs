@@ -225,17 +225,19 @@ impl App {
             let pid = selection.pid;
             let column_width_property = 15;
             let column_width_value = visible_table_width.saturating_sub(column_width_property + 1);
-            
-            let cache_hit = self
-                .process_info_cache
-                .borrow()
-                .as_ref()
-                .is_some_and(|(cached_pid, cached_width, _)| *cached_pid == pid && *cached_width == column_width_value as usize);
+
+            let cache_hit = self.process_info_cache.borrow().as_ref().is_some_and(
+                |(cached_pid, cached_width, _)| {
+                    *cached_pid == pid && *cached_width == column_width_value as usize
+                },
+            );
             let rows = if cache_hit {
                 self.process_info_cache.borrow().as_ref().unwrap().2.clone()
             } else {
-                let new_rows = process_info_to_rows(Pid::from_u32(pid), column_width_value as usize);
-                *self.process_info_cache.borrow_mut() = Some((pid, column_width_value as usize, new_rows.clone()));
+                let new_rows =
+                    process_info_to_rows(Pid::from_u32(pid), column_width_value as usize);
+                *self.process_info_cache.borrow_mut() =
+                    Some((pid, column_width_value as usize, new_rows.clone()));
                 new_rows
             };
             self.process_info_list_length.set(rows.len());
@@ -302,10 +304,10 @@ fn wrap_text(text: &str, max_length: usize) -> Vec<String> {
     if max_length == 0 {
         return vec![text.to_string()];
     }
-    
+
     let mut lines = Vec::new();
     let mut remaining = text;
-    
+
     while !remaining.is_empty() {
         if remaining.len() <= max_length {
             lines.push(remaining.to_string());
@@ -316,7 +318,7 @@ fn wrap_text(text: &str, max_length: usize) -> Vec<String> {
             remaining = rest;
         }
     }
-    
+
     lines
 }
 
