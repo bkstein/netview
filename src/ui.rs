@@ -223,16 +223,19 @@ impl App {
 
         if let Some(selection) = &self.selected {
             let pid = selection.pid;
+            let column_width_property = 15;
+            let column_width_value = visible_table_width.saturating_sub(column_width_property + 1);
+            
             let cache_hit = self
                 .process_info_cache
                 .borrow()
                 .as_ref()
-                .is_some_and(|(cached_pid, _)| *cached_pid == pid);
+                .is_some_and(|(cached_pid, cached_width, _)| *cached_pid == pid && *cached_width == column_width_value as usize);
             let rows = if cache_hit {
-                self.process_info_cache.borrow().as_ref().unwrap().1.clone()
+                self.process_info_cache.borrow().as_ref().unwrap().2.clone()
             } else {
-                let new_rows = process_info_to_rows(Pid::from_u32(pid));
-                *self.process_info_cache.borrow_mut() = Some((pid, new_rows.clone()));
+                let new_rows = process_info_to_rows(Pid::from_u32(pid), column_width_value as usize);
+                *self.process_info_cache.borrow_mut() = Some((pid, column_width_value as usize, new_rows.clone()));
                 new_rows
             };
             self.process_info_list_length.set(rows.len());
@@ -243,9 +246,6 @@ impl App {
 
             let rows_to_show = &rows[scroll_position
                 ..(scroll_position + self.visible_table_height.get()).min(rows.len())];
-
-            let column_width_property = 15;
-            let column_width_value = visible_table_width.saturating_sub(column_width_property + 1);
 
             let table = Table::new(
                 rows_to_show.iter().cloned(),
@@ -298,7 +298,29 @@ fn render_connections_header(sort_col: SortColumn, sort_order: SortOrder) -> Row
     Row::new(header_cells)
 }
 
-fn process_info_to_rows(pid: Pid) -> Vec<Row<'static>> {
+fn wrap_text(text: &str, max_length: usize) -> Vec<String> {
+    if max_length == 0 {
+        return vec![text.to_string()];
+    }
+    
+    let mut lines = Vec::new();
+    let mut remaining = text;
+    
+    while !remaining.is_empty() {
+        if remaining.len() <= max_length {
+            lines.push(remaining.to_string());
+            break;
+        } else {
+            let (line, rest) = remaining.split_at(max_length);
+            lines.push(line.to_string());
+            remaining = rest;
+        }
+    }
+    
+    lines
+}
+
+fn process_info_to_rows(pid: Pid, max_value_width: usize) -> Vec<Row<'static>> {
     let system = sysinfo::System::new_all();
     let users = sysinfo::Users::new_with_refreshed_list();
 
@@ -366,16 +388,29 @@ fn process_info_to_rows(pid: Pid) -> Vec<Row<'static>> {
             process_info.push(("env", env.to_string_lossy().to_string()));
         }
 
-        process_info
-            .iter()
-            .map(|e| {
-                let cells = vec![
-                    Cell::from(e.0.to_string()).style(normal),
-                    Cell::from(e.1.clone()).style(normal),
-                ];
-                Row::new(cells)
-            })
-            .collect()
+        let mut rows = Vec::new();
+        for (property, value) in process_info {
+            // Split long values into lines that fit within the available width
+            let wrapped_lines = wrap_text(&value, max_value_width);
+
+            // First line with property name
+            if let Some(first_line) = wrapped_lines.first() {
+                rows.push(Row::new(vec![
+                    Cell::from(property.to_string()).style(normal),
+                    Cell::from(first_line.clone()).style(normal),
+                ]));
+            }
+
+            // Additional lines with empty property cell
+            for line in wrapped_lines.iter().skip(1) {
+                rows.push(Row::new(vec![
+                    Cell::from("").style(normal),
+                    Cell::from(line.clone()).style(normal),
+                ]));
+            }
+        }
+
+        rows
     } else {
         vec![Row::new(vec![
             Cell::from("Process".to_string()).style(normal),

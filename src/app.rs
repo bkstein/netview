@@ -140,8 +140,8 @@ pub struct App {
     last_connection_refresh: RefCell<Option<Instant>>,
     /// Last time the user pressed a key (skip heavy refresh while actively scrolling).
     last_user_input: RefCell<Option<Instant>>,
-    /// Cached process info rows by PID so scrolling doesn't recompute every frame.
-    pub(crate) process_info_cache: RefCell<Option<(u32, Vec<Row<'static>>)>>,
+    /// Cached process info rows by PID and width so scrolling doesn't recompute every frame.
+    pub(crate) process_info_cache: RefCell<Option<(u32, usize, Vec<Row<'static>>)>>,
 }
 
 impl Default for App {
@@ -201,6 +201,10 @@ impl App {
                         crossterm::event::Event::Key(key_event) => {
                             self.record_user_input();
                             self.handle_key_events(key_event)?;
+                        }
+                        crossterm::event::Event::Resize(_, _) => {
+                            // Clear process info cache on resize so it recalculates with new width
+                            *self.process_info_cache.borrow_mut() = None;
                         }
                         _ => {}
                     }
