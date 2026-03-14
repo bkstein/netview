@@ -7,6 +7,7 @@ use std::{
     cmp::Ordering,
     collections::HashMap,
     net::IpAddr,
+    process::Command,
     time::{Duration, Instant},
 };
 use sysinfo::System;
@@ -29,6 +30,7 @@ pub enum SortColumn {
     State = 6,
     PID = 7,
     Process = 8,
+    DataRate = 9,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -51,7 +53,7 @@ pub enum ProtocolFilter {
     TcpAndUdp,
 }
 
-#[derive(Clone, Debug, Ord, PartialOrd)]
+#[derive(Clone, Debug)]
 pub struct ConnectionEntry {
     pub proto: String,
     pub local_ip: String,
@@ -62,6 +64,10 @@ pub struct ConnectionEntry {
     pub pid: u32,
     pub process: String,
     pub creation_time: Instant,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub data_rate: String, // Display string like "1.2 MB/s"
+    pub last_update: Instant,
 }
 
 impl PartialEq for ConnectionEntry {
@@ -77,6 +83,24 @@ impl PartialEq for ConnectionEntry {
 }
 
 impl Eq for ConnectionEntry {}
+
+impl Ord for ConnectionEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.proto.cmp(&other.proto)
+            .then(self.local_ip.cmp(&other.local_ip))
+            .then(self.local_port.cmp(&other.local_port))
+            .then(self.remote_ip.cmp(&other.remote_ip))
+            .then(self.remote_port.cmp(&other.remote_port))
+            .then(self.state.cmp(&other.state))
+            .then(self.pid.cmp(&other.pid))
+    }
+}
+
+impl PartialOrd for ConnectionEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 impl ConnectionEntry {
     pub fn get_id(&self) -> String {
@@ -142,6 +166,8 @@ pub struct App {
     last_user_input: RefCell<Option<Instant>>,
     /// Cached process info rows by PID so scrolling doesn't recompute every frame.
     pub(crate) process_info_cache: RefCell<Option<(u32, Vec<Row<'static>>)>>,
+    /// Previous connection data for rate calculation: (rx_bytes, tx_bytes, timestamp)
+    previous_connections: RefCell<HashMap<String, (u64, u64, Instant)>>,
 }
 
 impl Default for App {
@@ -168,6 +194,7 @@ impl Default for App {
             last_connection_refresh: RefCell::new(None),
             last_user_input: RefCell::new(None),
             process_info_cache: RefCell::new(None),
+            previous_connections: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -270,6 +297,9 @@ impl App {
             KeyCode::Char('8') => self
                 .events
                 .send(AppEvent::Sort(SortColumn::try_from_primitive(8)?)),
+            KeyCode::Char('9') => self
+                .events
+                .send(AppEvent::Sort(SortColumn::try_from_primitive(9)?)),
             // Other handlers you could add here.
             _ => {}
         }
@@ -517,12 +547,147 @@ impl App {
         self.ui_state = UiState::ProcessInfo;
     }
 
+    fn get_connection_bytes(&self) -> HashMap<String, (u64, u64)> {
+        let output = Command::new("netstat")
+            .args(&["-b", "-n"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or_default();
+
+        let mut bytes_map = HashMap::new();
+        let lines: Vec<&str> = output.lines().collect();
+        let mut i = 0;
+
+        // Skip header lines
+        while i < lines.len() && !lines[i].contains("Local Address") {
+            i += 1;
+        }
+        i += 1; // Skip the header line
+
+        while i < lines.len() {
+            let line = lines[i].trim();
+            if line.is_empty() {
+                i += 1;
+                continue;
+            }
+
+            // Parse the line
+            // Format: Proto Recv-Q Send-Q Local Address Foreign Address (state) rxbytes txbytes
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 6 {
+                i += 1;
+                continue;
+            }
+
+            let _proto = parts[0];
+            let local_addr = parts[3];
+            let foreign_addr = parts[4];
+
+            // Determine if this is TCP (has state) or UDP
+            let (rxbytes, txbytes) = if parts.len() >= 8 && parts[6].chars().all(char::is_numeric) {
+                // TCP with state: parts[6] is rxbytes, parts[7] is txbytes
+                (parts[6].parse().unwrap_or(0), parts[7].parse().unwrap_or(0))
+            } else if parts.len() >= 7 && parts[5].chars().all(char::is_numeric) {
+                // UDP: parts[5] is rxbytes, parts[6] is txbytes
+                (parts[5].parse().unwrap_or(0), parts[6].parse().unwrap_or(0))
+            } else {
+                i += 1;
+                continue;
+            };
+
+            // Parse addresses
+            if let Some((local_ip, local_port)) = self.parse_address(local_addr) {
+                if let Some((remote_ip, remote_port)) = self.parse_address(foreign_addr) {
+                    let key = format!("{}:{}:{}:{}", local_ip, local_port, remote_ip, remote_port);
+                    bytes_map.insert(key, (rxbytes, txbytes));
+                }
+            }
+
+            i += 1;
+        }
+
+        bytes_map
+    }
+
+    fn parse_address(&self, addr: &str) -> Option<(String, u16)> {
+        let parts: Vec<&str> = addr.split('.').collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        let port_str = parts.last()?;
+        let port = port_str.parse().ok()?;
+        let ip = parts[..parts.len()-1].join(".");
+        Some((ip, port))
+    }
+
+    fn calculate_rate(&self, conn_key: &str, current_bytes: &HashMap<String, (u64, u64)>, now: Instant) -> (u64, u64, String, Instant) {
+        let (rx_bytes, tx_bytes) = current_bytes.get(conn_key).copied().unwrap_or((0, 0));
+        
+        let prev_conns = self.previous_connections.borrow();
+        let rate = if let Some((prev_rx, prev_tx, prev_time)) = prev_conns.get(conn_key) {
+            let duration = now.duration_since(*prev_time).as_secs_f64();
+            if duration > 0.0 {
+                let rx_rate = ((rx_bytes.saturating_sub(*prev_rx)) as f64 / duration) as u64;
+                let tx_rate = ((tx_bytes.saturating_sub(*prev_tx)) as f64 / duration) as u64;
+                let total_rate = rx_rate + tx_rate;
+                self.format_rate(total_rate)
+            } else {
+                "0 B/s".to_string()
+            }
+        } else {
+            "0 B/s".to_string()
+        };
+        
+        (rx_bytes, tx_bytes, rate, now)
+    }
+
+    fn format_rate(&self, bytes_per_sec: u64) -> String {
+        const UNITS: &[&str] = &["B/s", "KB/s", "MB/s", "GB/s"];
+        let mut rate = bytes_per_sec as f64;
+        let mut unit_idx = 0;
+        
+        while rate >= 1024.0 && unit_idx < UNITS.len() - 1 {
+            rate /= 1024.0;
+            unit_idx += 1;
+        }
+        
+        if unit_idx == 0 {
+            format!("{} {}", bytes_per_sec, UNITS[0])
+        } else {
+            format!("{:.1} {}", rate, UNITS[unit_idx])
+        }
+    }
+
+    fn parse_rate(rate_str: &str) -> u64 {
+        let parts: Vec<&str> = rate_str.split_whitespace().collect();
+        if parts.len() != 2 {
+            return 0;
+        }
+        let value: f64 = parts[0].parse().unwrap_or(0.0);
+        let unit = parts[1];
+        
+        let multiplier = match unit {
+            "B/s" => 1,
+            "KB/s" => 1024,
+            "MB/s" => 1024 * 1024,
+            "GB/s" => 1024 * 1024 * 1024,
+            _ => 1,
+        };
+        
+        (value * multiplier as f64) as u64
+    }
+
     fn update_connection_entries(&mut self) {
         let af_flags = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
         let proto_flags = ProtocolFlags::TCP | ProtocolFlags::UDP;
 
         let mut sys = System::new_all();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+        // Get current byte counts
+        let current_bytes = self.get_connection_bytes();
+        let now = Instant::now();
 
         self.entries = vec![];
 
@@ -539,6 +704,10 @@ impl App {
                         if self.show_connection(&conn) {
                             let local_ip = self.ip_to_string(&tcp.local_addr);
                             let remote_ip = self.ip_to_string(&tcp.remote_addr);
+                            let conn_key = format!("{}:{}:{}:{}", local_ip, tcp.local_port, remote_ip, tcp.remote_port);
+                            
+                            let (rx_bytes, tx_bytes, data_rate, last_update) = self.calculate_rate(&conn_key, &current_bytes, now);
+                            
                             self.entries.push(ConnectionEntry {
                                 proto: if tcp.local_addr.is_ipv4() {
                                     "TCPv4".into()
@@ -553,12 +722,20 @@ impl App {
                                 pid,
                                 process: proc_name,
                                 creation_time: Instant::now(),
+                                rx_bytes,
+                                tx_bytes,
+                                data_rate,
+                                last_update,
                             });
                         }
                     }
                     ProtocolSocketInfo::Udp(ref udp) => {
                         if self.show_connection(&conn) {
                             let local_ip = self.ip_to_string(&udp.local_addr);
+                            let conn_key = format!("{}:{}:{}", local_ip, udp.local_port, "");
+                            
+                            let (rx_bytes, tx_bytes, data_rate, last_update) = self.calculate_rate(&conn_key, &current_bytes, now);
+                            
                             self.entries.push(ConnectionEntry {
                                 proto: if udp.local_addr.is_ipv4() {
                                     "UDPv4".into()
@@ -573,6 +750,10 @@ impl App {
                                 pid,
                                 process: proc_name,
                                 creation_time: Instant::now(),
+                                rx_bytes,
+                                tx_bytes,
+                                data_rate,
+                                last_update,
                             });
                         }
                     }
@@ -584,6 +765,14 @@ impl App {
         self.entries.dedup();
         self.sort_entries_by_column();
         self.reconcile_selection_after_refresh();
+
+        // Update previous connections for next rate calculation
+        let mut prev_conns = self.previous_connections.borrow_mut();
+        prev_conns.clear();
+        for entry in &self.entries {
+            let conn_key = format!("{}:{}:{}:{}", entry.local_ip, entry.local_port, entry.remote_ip, entry.remote_port);
+            prev_conns.insert(conn_key, (entry.rx_bytes, entry.tx_bytes, entry.last_update));
+        }
     }
 
     /// Keeps selection in sync after the entries list has been refreshed (e.g. on tick).
@@ -673,6 +862,7 @@ impl App {
                 State => string_compare_with_empty(&a.state, &b.state, self.sort_order),
                 PID => a.pid.cmp(&b.pid),
                 Process => string_compare_with_empty(&a.process, &b.process, self.sort_order),
+                DataRate => Self::parse_rate(&a.data_rate).cmp(&Self::parse_rate(&b.data_rate)),
             };
             if self.sort_order == SortOrder::Asc {
                 ord
