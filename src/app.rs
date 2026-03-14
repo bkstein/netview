@@ -86,7 +86,8 @@ impl Eq for ConnectionEntry {}
 
 impl Ord for ConnectionEntry {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.proto.cmp(&other.proto)
+        self.proto
+            .cmp(&other.proto)
             .then(self.local_ip.cmp(&other.local_ip))
             .then(self.local_port.cmp(&other.local_port))
             .then(self.remote_ip.cmp(&other.remote_ip))
@@ -556,7 +557,7 @@ impl App {
 
     fn get_connection_bytes(&self) -> HashMap<String, (u64, u64)> {
         let output = Command::new("netstat")
-            .args(&["-b", "-n"])
+            .args(["-b", "-n"])
             .output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -604,11 +605,11 @@ impl App {
             };
 
             // Parse addresses
-            if let Some((local_ip, local_port)) = self.parse_address(local_addr) {
-                if let Some((remote_ip, remote_port)) = self.parse_address(foreign_addr) {
-                    let key = format!("{}:{}:{}:{}", local_ip, local_port, remote_ip, remote_port);
-                    bytes_map.insert(key, (rxbytes, txbytes));
-                }
+            if let Some((local_ip, local_port)) = self.parse_address(local_addr)
+                && let Some((remote_ip, remote_port)) = self.parse_address(foreign_addr)
+            {
+                let key = format!("{}:{}:{}:{}", local_ip, local_port, remote_ip, remote_port);
+                bytes_map.insert(key, (rxbytes, txbytes));
             }
 
             i += 1;
@@ -624,13 +625,18 @@ impl App {
         }
         let port_str = parts.last()?;
         let port = port_str.parse().ok()?;
-        let ip = parts[..parts.len()-1].join(".");
+        let ip = parts[..parts.len() - 1].join(".");
         Some((ip, port))
     }
 
-    fn calculate_rate(&self, conn_key: &str, current_bytes: &HashMap<String, (u64, u64)>, now: Instant) -> (u64, u64, String, Instant) {
+    fn calculate_rate(
+        &self,
+        conn_key: &str,
+        current_bytes: &HashMap<String, (u64, u64)>,
+        now: Instant,
+    ) -> (u64, u64, String, Instant) {
         let (rx_bytes, tx_bytes) = current_bytes.get(conn_key).copied().unwrap_or((0, 0));
-        
+
         let prev_conns = self.previous_connections.borrow();
         let rate = if let Some((prev_rx, prev_tx, prev_time)) = prev_conns.get(conn_key) {
             let duration = now.duration_since(*prev_time).as_secs_f64();
@@ -645,7 +651,7 @@ impl App {
         } else {
             "0 B/s".to_string()
         };
-        
+
         (rx_bytes, tx_bytes, rate, now)
     }
 
@@ -653,12 +659,12 @@ impl App {
         const UNITS: &[&str] = &["B/s", "KB/s", "MB/s", "GB/s"];
         let mut rate = bytes_per_sec as f64;
         let mut unit_idx = 0;
-        
+
         while rate >= 1024.0 && unit_idx < UNITS.len() - 1 {
             rate /= 1024.0;
             unit_idx += 1;
         }
-        
+
         if unit_idx == 0 {
             format!("{} {}", bytes_per_sec, UNITS[0])
         } else {
@@ -673,7 +679,7 @@ impl App {
         }
         let value: f64 = parts[0].parse().unwrap_or(0.0);
         let unit = parts[1];
-        
+
         let multiplier = match unit {
             "B/s" => 1,
             "KB/s" => 1024,
@@ -681,7 +687,7 @@ impl App {
             "GB/s" => 1024 * 1024 * 1024,
             _ => 1,
         };
-        
+
         (value * multiplier as f64) as u64
     }
 
@@ -711,10 +717,14 @@ impl App {
                         if self.show_connection(&conn) {
                             let local_ip = self.ip_to_string(&tcp.local_addr);
                             let remote_ip = self.ip_to_string(&tcp.remote_addr);
-                            let conn_key = format!("{}:{}:{}:{}", local_ip, tcp.local_port, remote_ip, tcp.remote_port);
-                            
-                            let (rx_bytes, tx_bytes, data_rate, last_update) = self.calculate_rate(&conn_key, &current_bytes, now);
-                            
+                            let conn_key = format!(
+                                "{}:{}:{}:{}",
+                                local_ip, tcp.local_port, remote_ip, tcp.remote_port
+                            );
+
+                            let (rx_bytes, tx_bytes, data_rate, last_update) =
+                                self.calculate_rate(&conn_key, &current_bytes, now);
+
                             self.entries.push(ConnectionEntry {
                                 proto: if tcp.local_addr.is_ipv4() {
                                     "TCPv4".into()
@@ -740,9 +750,10 @@ impl App {
                         if self.show_connection(&conn) {
                             let local_ip = self.ip_to_string(&udp.local_addr);
                             let conn_key = format!("{}:{}:{}", local_ip, udp.local_port, "");
-                            
-                            let (rx_bytes, tx_bytes, data_rate, last_update) = self.calculate_rate(&conn_key, &current_bytes, now);
-                            
+
+                            let (rx_bytes, tx_bytes, data_rate, last_update) =
+                                self.calculate_rate(&conn_key, &current_bytes, now);
+
                             self.entries.push(ConnectionEntry {
                                 proto: if udp.local_addr.is_ipv4() {
                                     "UDPv4".into()
@@ -777,8 +788,14 @@ impl App {
         let mut prev_conns = self.previous_connections.borrow_mut();
         prev_conns.clear();
         for entry in &self.entries {
-            let conn_key = format!("{}:{}:{}:{}", entry.local_ip, entry.local_port, entry.remote_ip, entry.remote_port);
-            prev_conns.insert(conn_key, (entry.rx_bytes, entry.tx_bytes, entry.last_update));
+            let conn_key = format!(
+                "{}:{}:{}:{}",
+                entry.local_ip, entry.local_port, entry.remote_ip, entry.remote_port
+            );
+            prev_conns.insert(
+                conn_key,
+                (entry.rx_bytes, entry.tx_bytes, entry.last_update),
+            );
         }
     }
 
