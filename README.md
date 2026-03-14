@@ -8,7 +8,7 @@ Show live network connections on your local computer. This application was inspi
 
 | Key   | Description  |
 | :-:   | :-           |
-| 1-8   | Sort columns |
+| 1-9   | Sort columns |
 | p     | Toggle protocol (TCP/UDP) filter |
 | d     | Toggle (DNS) name resolution |
 | i     | Toggle IP version filter |

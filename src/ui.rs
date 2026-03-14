@@ -96,6 +96,13 @@ impl App {
                     } else {
                         normal
                     }),
+                    Cell::from(e.data_rate.clone()).style(if Some(e) == self.selected.as_ref() {
+                        selected_row_style
+                    } else if self.sort_column == SortColumn::DataRate {
+                        sorted_column_style
+                    } else {
+                        normal
+                    }),
                 ];
                 Row::new(cells)
             })
@@ -137,6 +144,7 @@ impl App {
                 Constraint::Length(11), // State
                 Constraint::Length(7),  // PID
                 Constraint::Length(25), // Process
+                Constraint::Length(10), // Rate
             ],
         )
         .header(header)
@@ -195,7 +203,7 @@ impl App {
             Line::from(" p        Toggle TCP / UDP filter"),
             Line::from(" d        Toggle DNS resolution"),
             Line::from(" h        This help"),
-            Line::from(" 1-8      Sort by column"),
+            Line::from(" 1-9      Sort by column"),
             Line::from(""),
             Line::from(vec![Span::styled(
                 " Press q or Esc to close ",
@@ -285,6 +293,7 @@ fn render_connections_header(sort_col: SortColumn, sort_order: SortOrder) -> Row
         ("State", State),
         ("PID", PID),
         ("Process", Process),
+        ("Rate", DataRate),
     ]
     .into_iter()
     .map(|(label, col)| {
