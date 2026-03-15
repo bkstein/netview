@@ -226,11 +226,11 @@ impl App {
                 Event::Tick => self.tick(),
                 Event::Crossterm(event) => {
                     match event {
-                        crossterm::event::Event::Key(key_event) => {
+                        ::ratatui::crossterm::event::Event::Key(key_event) => {
                             self.record_user_input();
                             self.handle_key_events(key_event)?;
                         }
-                        crossterm::event::Event::Resize(_, _) => {
+                        ::ratatui::crossterm::event::Event::Resize(_, _) => {
                             // Clear process info cache on resize so it recalculates with new width
                             *self.process_info_cache.borrow_mut() = None;
                         }
