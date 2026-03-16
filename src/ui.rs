@@ -178,7 +178,7 @@ impl App {
             ])
             .split(vertical[1]);
         let help_area = horizontal[1];
-        let overlay_style = Style::default().bg(Color::Black);
+        let overlay_style = Style::default();
         Clear.render(help_area, buf);
         for y in help_area.top()..help_area.bottom() {
             buf.set_string(
