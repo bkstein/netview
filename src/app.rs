@@ -661,7 +661,11 @@ impl App {
         let port_str = addr_port.rsplit(':').next()?;
         let port = port_str.parse().ok()?;
         let rest = addr_port.strip_suffix(&format!(":{}", port_str))?;
-        let addr = rest.strip_prefix('[').unwrap_or(rest).strip_suffix(']').unwrap_or(rest);
+        let addr = rest
+            .strip_prefix('[')
+            .unwrap_or(rest)
+            .strip_suffix(']')
+            .unwrap_or(rest);
         Some((addr.to_string(), port))
     }
 
