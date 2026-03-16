@@ -556,69 +556,135 @@ impl App {
     }
 
     fn get_connection_bytes(&self) -> HashMap<String, (u64, u64)> {
+        #[cfg(target_os = "macos")]
+        return self.get_connection_bytes_macos();
+        #[cfg(target_os = "linux")]
+        return self.get_connection_bytes_linux();
+        #[cfg(target_os = "windows")]
+        return self.get_connection_bytes_windows();
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        HashMap::new()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_connection_bytes_macos(&self) -> HashMap<String, (u64, u64)> {
         let output = Command::new("netstat")
             .args(["-b", "-n"])
             .output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .unwrap_or_default();
-
         let mut bytes_map = HashMap::new();
         let lines: Vec<&str> = output.lines().collect();
         let mut i = 0;
-
-        // Skip header lines
         while i < lines.len() && !lines[i].contains("Local Address") {
             i += 1;
         }
-        i += 1; // Skip the header line
-
+        i += 1;
         while i < lines.len() {
             let line = lines[i].trim();
             if line.is_empty() {
                 i += 1;
                 continue;
             }
-
-            // Parse the line
-            // Format: Proto Recv-Q Send-Q Local Address Foreign Address (state) rxbytes txbytes
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() < 6 {
                 i += 1;
                 continue;
             }
-
-            let _proto = parts[0];
             let local_addr = parts[3];
             let foreign_addr = parts[4];
-
-            // Determine if this is TCP (has state) or UDP
             let (rxbytes, txbytes) = if parts.len() >= 8 && parts[6].chars().all(char::is_numeric) {
-                // TCP with state: parts[6] is rxbytes, parts[7] is txbytes
                 (parts[6].parse().unwrap_or(0), parts[7].parse().unwrap_or(0))
             } else if parts.len() >= 7 && parts[5].chars().all(char::is_numeric) {
-                // UDP: parts[5] is rxbytes, parts[6] is txbytes
                 (parts[5].parse().unwrap_or(0), parts[6].parse().unwrap_or(0))
             } else {
                 i += 1;
                 continue;
             };
-
-            // Parse addresses
-            if let Some((local_ip, local_port)) = self.parse_address(local_addr)
-                && let Some((remote_ip, remote_port)) = self.parse_address(foreign_addr)
+            if let Some((local_ip, local_port)) = self.parse_address_macos(local_addr)
+                && let Some((remote_ip, remote_port)) = self.parse_address_macos(foreign_addr)
             {
                 let key = format!("{}:{}:{}:{}", local_ip, local_port, remote_ip, remote_port);
                 bytes_map.insert(key, (rxbytes, txbytes));
             }
-
             i += 1;
         }
-
         bytes_map
     }
 
-    fn parse_address(&self, addr: &str) -> Option<(String, u16)> {
+    #[cfg(target_os = "linux")]
+    fn get_connection_bytes_linux(&self) -> HashMap<String, (u64, u64)> {
+        let mut bytes_map = HashMap::new();
+        for (is_udp, cmd) in [(false, "ss -tni"), (true, "ss -uni")] {
+            let output = Command::new("sh")
+                .args(["-c", cmd])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .unwrap_or_default();
+            let lines: Vec<&str> = output.lines().collect();
+            let mut i = 0;
+            let mut last_key: Option<String> = None;
+            while i < lines.len() {
+                let line = lines[i];
+                if line.starts_with('\t') || line.starts_with("  ") {
+                    let rx = Self::parse_ss_bytes(line, "bytes_received:");
+                    let tx = Self::parse_ss_bytes(line, "bytes_sent:");
+                    if let Some(key) = last_key.take() {
+                        bytes_map.insert(key, (rx, tx));
+                    }
+                } else {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 5 && parts[0] != "State" {
+                        if let Some(local) = Self::parse_ss_addr_port(parts[3]) {
+                            let key = if is_udp {
+                                format!("{}:{}:", local.0, local.1)
+                            } else if let Some(peer) = Self::parse_ss_addr_port(parts[4]) {
+                                format!("{}:{}:{}:{}", local.0, local.1, peer.0, peer.1)
+                            } else {
+                                continue;
+                            };
+                            last_key = Some(key);
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+        bytes_map
+    }
+
+    #[cfg(target_os = "linux")]
+    fn parse_ss_addr_port(addr_port: &str) -> Option<(String, u16)> {
+        let addr_port = addr_port.trim();
+        let port_str = addr_port.rsplit(':').next()?;
+        let port = port_str.parse().ok()?;
+        let rest = addr_port.strip_suffix(&format!(":{}", port_str))?;
+        let addr = rest.strip_prefix('[').unwrap_or(rest).strip_suffix(']').unwrap_or(rest);
+        Some((addr.to_string(), port))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn parse_ss_bytes(line: &str, prefix: &str) -> u64 {
+        for token in line.split_whitespace() {
+            if let Some(val) = token.strip_prefix(prefix) {
+                return val.parse().unwrap_or(0);
+            }
+        }
+        0
+    }
+
+    #[cfg(target_os = "windows")]
+    fn get_connection_bytes_windows(&self) -> HashMap<String, (u64, u64)> {
+        // Windows netstat does not provide per-connection byte counts; return empty.
+        // Data rate will show "0 B/s" until a sample is available.
+        let _ = self;
+        HashMap::new()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn parse_address_macos(&self, addr: &str) -> Option<(String, u16)> {
         let parts: Vec<&str> = addr.split('.').collect();
         if parts.len() < 2 {
             return None;
@@ -627,6 +693,17 @@ impl App {
         let port = port_str.parse().ok()?;
         let ip = parts[..parts.len() - 1].join(".");
         Some((ip, port))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[allow(dead_code)]
+    fn parse_address(&self, _addr: &str) -> Option<(String, u16)> {
+        None
+    }
+
+    #[cfg(target_os = "macos")]
+    fn parse_address(&self, addr: &str) -> Option<(String, u16)> {
+        self.parse_address_macos(addr)
     }
 
     fn calculate_rate(
