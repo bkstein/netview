@@ -681,10 +681,7 @@ impl App {
 
     #[cfg(target_os = "windows")]
     fn get_connection_bytes_windows(&self) -> HashMap<String, (u64, u64)> {
-        // Windows netstat does not provide per-connection byte counts; return empty.
-        // Data rate will show "0 B/s" until a sample is available.
-        let _ = self;
-        HashMap::new()
+        crate::windows_net::get_connection_bytes()
     }
 
     #[cfg(target_os = "macos")]

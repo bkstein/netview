@@ -6,6 +6,9 @@ pub mod app;
 pub mod event;
 pub mod ui;
 
+#[cfg(target_os = "windows")]
+pub mod windows_net;
+
 /// Drain any keys already in the terminal input buffer (e.g. Enter from starting the app in
 /// PowerShell). Prevents the first key from opening process info or other views on Windows.
 fn drain_pending_input() {
