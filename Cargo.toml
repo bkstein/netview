@@ -18,4 +18,4 @@ netstat2 = "0.11"
 num_enum = "0.7"
 ratatui = { version = "0.30.0" }
 sysinfo = "0.37"
-tokio = { version = "1.48.0", features = ["full"] }
+tokio = { version = "1.51.0", features = ["full"] }
