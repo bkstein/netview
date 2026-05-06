@@ -10,7 +10,7 @@ use ratatui::{
 use std::time::Duration;
 use sysinfo::Pid;
 
-use crate::app::{App, SortColumn, SortOrder};
+use crate::app::{App, IpVersionFilter, ProtocolFilter, SortColumn, SortOrder};
 
 impl Widget for &App {
     /// Renders the user interface widgets.
@@ -19,6 +19,7 @@ impl Widget for &App {
             crate::app::UiState::ConnectionTable => self.render_connection_table(area, buf),
             crate::app::UiState::Help => self.render_help_overlay(area, buf),
             crate::app::UiState::ProcessInfo => self.render_process_info(area, buf),
+            crate::app::UiState::Options => self.render_options_overlay(area, buf),
         }
     }
 }
@@ -211,6 +212,7 @@ impl App {
             Line::from(" i        Toggle IPv4 / IPv6 filter"),
             Line::from(" p        Toggle TCP / UDP filter"),
             Line::from(" d        Toggle DNS resolution"),
+            Line::from(" o        View options dialog"),
             Line::from(" h        This help"),
             Line::from(if self.show_data_rate_column() {
                 " 1-9      Sort by column"
@@ -234,6 +236,68 @@ impl App {
             .style(overlay_style)
             .wrap(Wrap { trim: true });
         paragraph.render(help_area, buf);
+    }
+
+    fn render_options_overlay(&self, area: Rect, buf: &mut Buffer) {
+        self.render_connection_table(area, buf);
+
+        let dialog_width = 58u16;
+        let dialog_height = 11u16;
+        let vertical = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(dialog_height),
+                Constraint::Min(0),
+            ])
+            .split(area);
+        let horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(dialog_width),
+                Constraint::Min(0),
+            ])
+            .split(vertical[1]);
+        let dialog_area = horizontal[1];
+        Clear.render(dialog_area, buf);
+
+        let sort_label = App::sort_column_header_name(self.sort_column);
+        let rows = [
+            format!("Protocol      < {} >", protocol_filter_label(self.protocol_filter)),
+            format!("IP version    < {} >", ip_version_filter_label(self.ip_version_filter)),
+            format!(
+                "DNS resolving [ {} ]",
+                if self.resolve_address_names { "x" } else { " " }
+            ),
+            format!("Sort column   < {} >", sort_label),
+        ];
+
+        let mut lines = Vec::new();
+        lines.push(Line::from(" Use Up/Down to select and Left/Right to change "));
+        lines.push(Line::from(" "));
+        for (idx, row_text) in rows.iter().enumerate() {
+            let style = if idx == self.options_dialog_selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(row_text.clone(), style)));
+        }
+        lines.push(Line::from(" "));
+        lines.push(Line::from(" Enter/Space toggles selected option, Esc/o closes "));
+
+        let paragraph = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(" View Options ")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded),
+            )
+            .wrap(Wrap { trim: true });
+        paragraph.render(dialog_area, buf);
     }
 
     fn render_process_info(&self, area: Rect, buf: &mut Buffer) {
@@ -328,6 +392,22 @@ fn render_connections_header(
     .collect::<Vec<_>>();
 
     Row::new(header_cells)
+}
+
+fn protocol_filter_label(value: ProtocolFilter) -> &'static str {
+    match value {
+        ProtocolFilter::TcpOnly => "TCP",
+        ProtocolFilter::UdpOnly => "UDP",
+        ProtocolFilter::TcpAndUdp => "Both",
+    }
+}
+
+fn ip_version_filter_label(value: IpVersionFilter) -> &'static str {
+    match value {
+        IpVersionFilter::Ipv4Only => "IPv4",
+        IpVersionFilter::Ipv6Only => "IPv6",
+        IpVersionFilter::Ipv4AndIpv6 => "Both",
+    }
 }
 
 fn wrap_text(text: &str, max_length: usize) -> Vec<String> {

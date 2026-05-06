@@ -121,6 +121,8 @@ pub enum UiState {
     Help,
     /// Showing info about the process of the selected connection
     ProcessInfo,
+    /// Showing view options dialog
+    Options,
 }
 
 /// Application.
@@ -162,6 +164,8 @@ pub struct App {
     pub selected_index: Option<usize>,
     /// Ui state
     pub ui_state: UiState,
+    /// Selected row in options dialog
+    pub options_dialog_selected: usize,
     /// Last time the connection list was refreshed (for throttling).
     last_connection_refresh: RefCell<Option<Instant>>,
     /// Last time the user pressed a key (skip heavy refresh while actively scrolling).
@@ -193,6 +197,7 @@ impl Default for App {
             selected: None,
             selected_index: None,
             ui_state: UiState::ConnectionTable,
+            options_dialog_selected: 0,
             last_connection_refresh: RefCell::new(None),
             last_user_input: RefCell::new(None),
             process_info_cache: RefCell::new(None),
@@ -210,6 +215,37 @@ impl App {
     #[cfg(not(target_os = "windows"))]
     pub fn show_data_rate_column(&self) -> bool {
         true
+    }
+
+    pub fn available_sort_columns(&self) -> Vec<SortColumn> {
+        let mut cols = vec![
+            SortColumn::Proto,
+            SortColumn::LocalIP,
+            SortColumn::LocalPort,
+            SortColumn::RemoteIP,
+            SortColumn::RemotePort,
+            SortColumn::State,
+            SortColumn::PID,
+            SortColumn::Process,
+        ];
+        if self.show_data_rate_column() {
+            cols.push(SortColumn::DataRate);
+        }
+        cols
+    }
+
+    pub fn sort_column_header_name(column: SortColumn) -> &'static str {
+        match column {
+            SortColumn::Proto => "Prot",
+            SortColumn::LocalIP => "Local IP",
+            SortColumn::LocalPort => "LPort",
+            SortColumn::RemoteIP => "Remote IP",
+            SortColumn::RemotePort => "RPort",
+            SortColumn::State => "State",
+            SortColumn::PID => "PID",
+            SortColumn::Process => "Process",
+            SortColumn::DataRate => "Rate",
+        }
     }
 
     /// Constructs a new instance of [`App`].
@@ -277,6 +313,10 @@ impl App {
         if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return Ok(());
         }
+        if self.ui_state == UiState::Options {
+            self.handle_options_key_events(key_event);
+            return Ok(());
+        }
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
@@ -292,6 +332,13 @@ impl App {
             KeyCode::Char('p' | 'P') => self.events.send(AppEvent::ToggleProtoVersion),
             KeyCode::Char('d' | 'D') => self.events.send(AppEvent::ToggleDnsResolution),
             KeyCode::Char('h' | 'H') => self.events.send(AppEvent::ShowHelp),
+            KeyCode::Char('o' | 'O') => self.show_options(),
+            KeyCode::Left if self.ui_state == UiState::ConnectionTable => {
+                self.cycle_sort_column(false)
+            }
+            KeyCode::Right if self.ui_state == UiState::ConnectionTable => {
+                self.cycle_sort_column(true)
+            }
             KeyCode::Char('1') => self
                 .events
                 .send(AppEvent::Sort(SortColumn::try_from_primitive(1)?)),
@@ -326,6 +373,25 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_options_key_events(&mut self, key_event: KeyEvent) {
+        match key_event.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o' | 'O') => {
+                self.ui_state = UiState::ConnectionTable;
+            }
+            KeyCode::Up => {
+                if self.options_dialog_selected > 0 {
+                    self.options_dialog_selected -= 1;
+                }
+            }
+            KeyCode::Down => {
+                self.options_dialog_selected = (self.options_dialog_selected + 1).min(3);
+            }
+            KeyCode::Left => self.adjust_option(false),
+            KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => self.adjust_option(true),
+            _ => {}
+        }
     }
 
     /// Handles the tick event of the terminal.
@@ -388,6 +454,9 @@ impl App {
                 self.process_info_cache.replace(None);
                 self.ui_state = UiState::ConnectionTable;
             }
+            UiState::Options => {
+                self.ui_state = UiState::ConnectionTable;
+            }
         }
     }
 
@@ -401,6 +470,7 @@ impl App {
             UiState::ConnectionTable => self.scroll_up_connections(),
             UiState::Help => {}
             UiState::ProcessInfo => self.scroll_up_process_info(),
+            UiState::Options => {}
         }
     }
 
@@ -436,6 +506,7 @@ impl App {
             UiState::ConnectionTable => self.scroll_down_connections(),
             UiState::Help => {}
             UiState::ProcessInfo => self.scroll_down_process_info(),
+            UiState::Options => {}
         }
     }
 
@@ -475,6 +546,7 @@ impl App {
             UiState::ConnectionTable => self.scroll_up_connections_page(),
             UiState::Help => {}
             UiState::ProcessInfo => self.scroll_up_process_info_page(),
+            UiState::Options => {}
         }
     }
 
@@ -483,6 +555,7 @@ impl App {
             UiState::ConnectionTable => self.scroll_down_connections_page(),
             UiState::Help => {}
             UiState::ProcessInfo => self.scroll_down_process_info_page(),
+            UiState::Options => {}
         }
     }
 
@@ -564,6 +637,14 @@ impl App {
         self.sort_entries_by_column();
     }
 
+    fn set_sort_column(&mut self, sort_column: SortColumn) {
+        if !self.show_data_rate_column() && sort_column == SortColumn::DataRate {
+            return;
+        }
+        self.sort_column = sort_column;
+        self.sort_entries_by_column();
+    }
+
     fn show_help(&mut self) {
         self.ui_state = match self.ui_state {
             UiState::Help => UiState::ConnectionTable,
@@ -571,8 +652,66 @@ impl App {
         };
     }
 
+    fn show_options(&mut self) {
+        self.options_dialog_selected = 0;
+        self.ui_state = UiState::Options;
+    }
+
     fn show_process_info(&mut self) {
         self.ui_state = UiState::ProcessInfo;
+    }
+
+    fn adjust_option(&mut self, forward: bool) {
+        match self.options_dialog_selected {
+            0 => {
+                self.protocol_filter = match (self.protocol_filter, forward) {
+                    (ProtocolFilter::TcpOnly, true) => ProtocolFilter::UdpOnly,
+                    (ProtocolFilter::UdpOnly, true) => ProtocolFilter::TcpAndUdp,
+                    (ProtocolFilter::TcpAndUdp, true) => ProtocolFilter::TcpOnly,
+                    (ProtocolFilter::TcpOnly, false) => ProtocolFilter::TcpAndUdp,
+                    (ProtocolFilter::UdpOnly, false) => ProtocolFilter::TcpOnly,
+                    (ProtocolFilter::TcpAndUdp, false) => ProtocolFilter::UdpOnly,
+                };
+                self.refresh_connection_list();
+            }
+            1 => {
+                self.ip_version_filter = match (self.ip_version_filter, forward) {
+                    (IpVersionFilter::Ipv4Only, true) => IpVersionFilter::Ipv6Only,
+                    (IpVersionFilter::Ipv6Only, true) => IpVersionFilter::Ipv4AndIpv6,
+                    (IpVersionFilter::Ipv4AndIpv6, true) => IpVersionFilter::Ipv4Only,
+                    (IpVersionFilter::Ipv4Only, false) => IpVersionFilter::Ipv4AndIpv6,
+                    (IpVersionFilter::Ipv6Only, false) => IpVersionFilter::Ipv4Only,
+                    (IpVersionFilter::Ipv4AndIpv6, false) => IpVersionFilter::Ipv6Only,
+                };
+                self.refresh_connection_list();
+            }
+            2 => {
+                self.resolve_address_names = !self.resolve_address_names;
+                self.refresh_connection_list();
+            }
+            3 => self.cycle_sort_column(forward),
+            _ => {}
+        }
+    }
+
+    fn cycle_sort_column(&mut self, forward: bool) {
+        let columns = self.available_sort_columns();
+        if columns.is_empty() {
+            return;
+        }
+
+        let current_idx = columns
+            .iter()
+            .position(|col| *col == self.sort_column)
+            .unwrap_or(0);
+        let next_idx = if forward {
+            (current_idx + 1) % columns.len()
+        } else if current_idx == 0 {
+            columns.len() - 1
+        } else {
+            current_idx - 1
+        };
+        self.set_sort_column(columns[next_idx]);
     }
 
     fn get_connection_bytes(&self) -> HashMap<String, (u64, u64)> {
