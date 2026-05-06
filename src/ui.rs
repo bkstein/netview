@@ -32,7 +32,7 @@ impl App {
                 let selected_row_style = Style::default().add_modifier(Modifier::REVERSED);
                 let normal = Style::default();
 
-                let cells = vec![
+                let mut cells = vec![
                     Cell::from(e.proto.clone()).style(if Some(e) == self.selected.as_ref() {
                         selected_row_style
                     } else if self.sort_column == SortColumn::Proto {
@@ -96,14 +96,18 @@ impl App {
                     } else {
                         normal
                     }),
-                    Cell::from(e.data_rate.clone()).style(if Some(e) == self.selected.as_ref() {
-                        selected_row_style
-                    } else if self.sort_column == SortColumn::DataRate {
-                        sorted_column_style
-                    } else {
-                        normal
-                    }),
                 ];
+                if self.show_data_rate_column() {
+                    cells.push(Cell::from(e.data_rate.clone()).style(
+                        if Some(e) == self.selected.as_ref() {
+                            selected_row_style
+                        } else if self.sort_column == SortColumn::DataRate {
+                            sorted_column_style
+                        } else {
+                            normal
+                        },
+                    ));
+                }
                 Row::new(cells)
             })
             .collect()
@@ -115,7 +119,11 @@ impl App {
         self.visible_table_height.set(visible_table_height);
 
         let rows = self.entries_to_rows();
-        let header = render_connections_header(self.sort_column, self.sort_order);
+        let header = render_connections_header(
+            self.sort_column,
+            self.sort_order,
+            self.show_data_rate_column(),
+        );
 
         let connections_title = if self.paused {
             "Connections (paused - press 'SPACE' to resume)"
@@ -133,20 +141,21 @@ impl App {
         };
         let rows_to_show = &rows[self.scroll_connection_table.get()
             ..(self.scroll_connection_table.get() + visible_table_height).min(rows.len())];
-        let table = Table::new(
-            rows_to_show.iter().cloned(),
-            [
-                Constraint::Length(7),  // Proto
-                Constraint::Length(40), // Local IP
-                Constraint::Length(5),  // Local Port
-                Constraint::Length(40), // Remote IP
-                Constraint::Length(5),  // Remote Port
-                Constraint::Length(11), // State
-                Constraint::Length(7),  // PID
-                Constraint::Length(25), // Process
-                Constraint::Length(10), // Rate
-            ],
-        )
+        let mut constraints = vec![
+            Constraint::Length(7),  // Proto
+            Constraint::Length(40), // Local IP
+            Constraint::Length(5),  // Local Port
+            Constraint::Length(40), // Remote IP
+            Constraint::Length(5),  // Remote Port
+            Constraint::Length(11), // State
+            Constraint::Length(7),  // PID
+            Constraint::Length(25), // Process
+        ];
+        if self.show_data_rate_column() {
+            constraints.push(Constraint::Length(10)); // Rate
+        }
+
+        let table = Table::new(rows_to_show.iter().cloned(), constraints)
         .header(header)
         .block(
             Block::default()
@@ -203,7 +212,11 @@ impl App {
             Line::from(" p        Toggle TCP / UDP filter"),
             Line::from(" d        Toggle DNS resolution"),
             Line::from(" h        This help"),
-            Line::from(" 1-9      Sort by column"),
+            Line::from(if self.show_data_rate_column() {
+                " 1-9      Sort by column"
+            } else {
+                " 1-8      Sort by column"
+            }),
             Line::from(""),
             Line::from(vec![Span::styled(
                 " Press q or Esc to close ",
@@ -276,7 +289,11 @@ impl App {
     }
 }
 
-fn render_connections_header(sort_col: SortColumn, sort_order: SortOrder) -> Row<'static> {
+fn render_connections_header(
+    sort_col: SortColumn,
+    sort_order: SortOrder,
+    show_data_rate_column: bool,
+) -> Row<'static> {
     use SortColumn::*;
 
     let arrow = match sort_order {
@@ -293,9 +310,13 @@ fn render_connections_header(sort_col: SortColumn, sort_order: SortOrder) -> Row
         ("State", State),
         ("PID", PID),
         ("Process", Process),
-        ("Rate", DataRate),
     ]
     .into_iter()
+    .chain(
+        show_data_rate_column
+            .then_some(("Rate", DataRate))
+            .into_iter(),
+    )
     .map(|(label, col)| {
         let text = if col == sort_col {
             format!("{label}{arrow}")

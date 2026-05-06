@@ -66,7 +66,7 @@ pub struct ConnectionEntry {
     pub creation_time: Instant,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
-    pub data_rate: String, // Display string like "1.2 MB/s"
+    pub data_rate: String,
     pub last_update: Instant,
 }
 
@@ -167,7 +167,7 @@ pub struct App {
     last_user_input: RefCell<Option<Instant>>,
     /// Cached process info rows by PID and width so scrolling doesn't recompute every frame.
     pub(crate) process_info_cache: RefCell<Option<(u32, usize, Vec<Row<'static>>)>>,
-    /// Previous connection data for rate calculation: (rx_bytes, tx_bytes, timestamp)
+    /// Previous connection byte snapshot: (rx_bytes, tx_bytes, timestamp)
     previous_connections: RefCell<HashMap<String, (u64, u64, Instant)>>,
 }
 
@@ -201,6 +201,16 @@ impl Default for App {
 }
 
 impl App {
+    #[cfg(target_os = "windows")]
+    pub fn show_data_rate_column(&self) -> bool {
+        false
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn show_data_rate_column(&self) -> bool {
+        true
+    }
+
     /// Constructs a new instance of [`App`].
     pub fn new() -> Self {
         Self::default()
@@ -302,9 +312,12 @@ impl App {
             KeyCode::Char('8') => self
                 .events
                 .send(AppEvent::Sort(SortColumn::try_from_primitive(8)?)),
-            KeyCode::Char('9') => self
-                .events
-                .send(AppEvent::Sort(SortColumn::try_from_primitive(9)?)),
+            KeyCode::Char('9') => {
+                if self.show_data_rate_column() {
+                    self.events
+                        .send(AppEvent::Sort(SortColumn::try_from_primitive(9)?));
+                }
+            }
             // Other handlers you could add here.
             _ => {}
         }
@@ -533,6 +546,9 @@ impl App {
     }
 
     fn sort_by_column(&mut self, sort_column: SortColumn) {
+        if !self.show_data_rate_column() && sort_column == SortColumn::DataRate {
+            return;
+        }
         if self.sort_column == sort_column {
             self.sort_order = match self.sort_order {
                 SortOrder::Asc => SortOrder::Desc,
@@ -560,9 +576,7 @@ impl App {
         return self.get_connection_bytes_macos();
         #[cfg(target_os = "linux")]
         return self.get_connection_bytes_linux();
-        #[cfg(target_os = "windows")]
-        return self.get_connection_bytes_windows();
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         HashMap::new()
     }
 
@@ -679,11 +693,6 @@ impl App {
         0
     }
 
-    #[cfg(target_os = "windows")]
-    fn get_connection_bytes_windows(&self) -> HashMap<String, (u64, u64)> {
-        crate::windows_net::get_connection_bytes()
-    }
-
     #[cfg(target_os = "macos")]
     fn parse_address_macos(&self, addr: &str) -> Option<(String, u16)> {
         let parts: Vec<&str> = addr.split('.').collect();
@@ -776,7 +785,7 @@ impl App {
         let mut sys = System::new_all();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
-        // Get current byte counts
+        // Get current byte counters
         let current_bytes = self.get_connection_bytes();
         let now = Instant::now();
 
@@ -862,7 +871,7 @@ impl App {
         self.sort_entries_by_column();
         self.reconcile_selection_after_refresh();
 
-        // Update previous connections for next rate calculation
+        // Update previous connection snapshot for next refresh
         let mut prev_conns = self.previous_connections.borrow_mut();
         prev_conns.clear();
         for entry in &self.entries {
