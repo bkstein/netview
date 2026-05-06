@@ -7,15 +7,16 @@ use std::{
     cmp::Ordering,
     collections::HashMap,
     net::IpAddr,
-    process::Command,
     time::{Duration, Instant},
 };
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::process::Command;
 use sysinfo::System;
 
 use crate::event::{AppEvent, Event, EventHandler};
 use ratatui::{
     DefaultTerminal,
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     widgets::Row,
 };
 
@@ -273,6 +274,9 @@ impl App {
 
     /// Handles the key events and converts them into `AppEvent`s.
     pub fn handle_key_events(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+        if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return Ok(());
+        }
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
