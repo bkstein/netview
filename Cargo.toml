@@ -5,6 +5,25 @@ description = "Live view of network connections in a terminal, inspired by Mark 
 authors = ["Bernd Krietenstein <bernd.krietenstein@gmx.de>"]
 license = "MIT"
 edition = "2024"
+readme = "README.md"
+homepage = "https://github.com/bkstein/netview"
+repository = "https://github.com/bkstein/netview"
+
+[package.metadata.deb]
+maintainer = "Bernd Krietenstein <bernd.krietenstein@gmx.de>"
+copyright = "Bernd Krietenstein <bernd.krietenstein@gmx.de>"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+Terminal UI that lists live TCP and UDP connections on the local machine, \
+with process details, optional DNS lookup, and protocol/IP filters. \
+Inspired by Mark Russinovich's TCPView."""
+depends = "$auto"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/netview", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/netview/README.md", "644"],
+]
 
 [dependencies]
 bytesize = "1.3"

@@ -86,3 +86,21 @@ jobs:
         run: cargo test --locked --all-features --all-targets
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
+  deb:
+    name: debian package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+      - name: Build Debian package
+        run: cargo deb --locked
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: netview-deb
+          path: target/debian/*.deb
